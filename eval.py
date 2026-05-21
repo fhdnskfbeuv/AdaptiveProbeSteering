@@ -32,10 +32,12 @@ if __name__ == '__main__':
 	valueLine = [args.evalData, args.model, args.doSample, args.evalPT, os.path.split(args.clfP)[-1], args.evalClfr, args.maxL, args.answerOnly]
 	with torch.no_grad():
 		model, processor, config = myUtil.loadModel(args.model, args.tokenizer)
+		probeName = 'None'
 		if args.clfP == 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
 			model = ProbeManager.wrapModel(model, probes.toMLP(args.evalPT), probes.getLayerIdxs())
+		print(probeName)
 		allComp = myUtil.gen(model, processor, prompts, args.maxL, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
 		del model
 		torch.cuda.empty_cache()
