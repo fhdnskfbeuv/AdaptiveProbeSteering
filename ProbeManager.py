@@ -73,7 +73,7 @@ class ProbeManager:
 		self.probes = {}
 		for layerIdx, batch in hdManager.layer2hd.items():
 			x = batch['hd'].clone().numpy()
-			C = 1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item() if normReg else 1.0
+			C = (1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item() ** 2) if normReg else 1.0
 			y = batch['label'].clone().numpy()
 			totalWeight = x.shape[0]
 			posClassWeight = totalWeight / (2 * (y == 1).sum().item())

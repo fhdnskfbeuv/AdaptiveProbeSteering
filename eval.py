@@ -33,7 +33,7 @@ if __name__ == '__main__':
 	with torch.no_grad():
 		model, processor, config = myUtil.loadModel(args.model, args.tokenizer)
 		probeName = 'None'
-		if args.clfP == 'None':
+		if args.clfP != 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
 			model = ProbeManager.wrapModel(model, probes.toMLP(args.evalPT), probes.getLayerIdxs())
