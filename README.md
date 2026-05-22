@@ -55,7 +55,7 @@ Below are the arguments of ```eval.py```:
 
 Which component is important for a model extraction (or active learning) algorithm?
 
-First, the judge to be approximated should be accurate. Without an accurate judge, how can the probe, which  be accurate? You can add some new powerful judges into ```myJudge.py```. Of course, you can also utilize commercial big LLMs if you are ok with their randomness induced by the lack of batch invariance. We use SRF, which is finetuned from an old gemma-2b, by default because it is deterministic and save token charge.
+First, the judge should be accurate. Without an accurate judge, how can the probe, which approximate the judge, be accurate? You can add some new powerful judges into ```myJudge.py```. Of course, you can also utilize commercial big LLMs if you are ok with their randomness induced by the lack of batch invariance. We use SRF, which is finetuned from an old gemma-2b, by default because it is deterministic and save token charge.
 
 Second, you may develop some better and adaptive steering strength schemes for sampling hidden states for the next iteration. We set strength="abs0", which steers the hidden state to the boundry, because classic model extraction (or active learning) algorithms do so. We have proven that increasing the strength to "0.5" can slightly improve our method in Table 7. So, don't let the default setting limits you (Yet, it is ok to use the default setting if you want to beat our method in your new paper).
 
