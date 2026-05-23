@@ -1,10 +1,11 @@
+import numpy as np
+import torch
+from cuml.linear_model import LogisticRegression
 from peft import PeftModel
 from sklearn.linear_model import LogisticRegression as skLR
-from sklearn.svm import LinearSVC
-from cuml.linear_model import LogisticRegression
+
 import HiddenStateManager
-import torch
-import numpy as np
+from transformers import Qwen3ForCausalLM
 
 
 class SCAVAdapter(torch.nn.Module):
@@ -73,7 +74,7 @@ class ProbeManager:
 		self.probes = {}
 		for layerIdx, batch in hdManager.layer2hd.items():
 			x = batch['hd'].clone().numpy()
-			C = (1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item() ** 2) if normReg else 1.0
+			C = min(1.0, 1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item()) if normReg else 1.0
 			y = batch['label'].clone().numpy()
 			totalWeight = x.shape[0]
 			posClassWeight = totalWeight / (2 * (y == 1).sum().item())

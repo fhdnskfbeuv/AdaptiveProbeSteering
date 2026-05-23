@@ -39,14 +39,15 @@ if __name__ == '__main__':
 		args.layer.insert(0, -config.num_hidden_layers)
 	saveDir = os.path.join(args.saveDir, args.model.replace('./', '').replace('/', '_'))
 	os.makedirs(saveDir, exist_ok=True)
+	judgeN = args.judge.split(' ')[0]
 	clfP = os.path.join(saveDir,
-						f'judge{args.judge[0]}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer{args.layer}_gpuLR{args.gpuLR}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
+						f'judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer{args.layer}_gpuLR{args.gpuLR}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
 							'/',
 							'-'))
 	layerIdxs = list(range(config.num_hidden_layers))[config.num_hidden_layers + args.layer[0]:config.num_hidden_layers + 1 + args.layer[1]]
 	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train')
 	if args.filter:
-		benignTrainPrompts = myUtil.filterData(model, processor, 'srf', benignTrainPrompts, 512, 0.5, None)
+		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, 512, args.thres[1], None)
 	# get initial embd
 	hdManager = HiddenStateManager.HDManager(layerIdxs)
 	# get the hd you don't prefer
@@ -66,7 +67,7 @@ if __name__ == '__main__':
 	# wrap model
 	model = ProbeManager.wrapModel(model, probes.toMLP(args.pt), layerIdxs)
 	# get judge
-	judgeM, judgeF = myUtil.loadJudge(args.judge.split(' '))
+	judgeM, judgeF = myUtil.loadJudge(args.judge)
 	# model extraction starts
 	allPosScore = []
 	for i in range(args.maxIter):

@@ -137,6 +137,8 @@ def loadModel(modelN, tokenizerN):
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
+			if model.generation_config.max_length is not None:
+				model.generation_config.max_length = None
 			if model.generation_config.pad_token_id is None:
 				model.generation_config.pad_token_id = model.generation_config.eos_token_id[0] if isinstance(model.generation_config.eos_token_id, list) else model.generation_config.eos_token_id
 				print(f"Setting `pad_token_id` to `eos_token_id`:{model.generation_config.pad_token_id} for open-end generation.")
@@ -179,6 +181,8 @@ def loadVisualModel(modelN, tokenizerN):
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
+			if model.generation_config.max_length is not None:
+				model.generation_config.max_length = None
 			if model.generation_config.pad_token_id is None:
 				model.generation_config.pad_token_id = model.generation_config.eos_token_id[0] if isinstance(model.generation_config.eos_token_id, list) else model.generation_config.eos_token_id
 				print(f"Setting `pad_token_id` to `eos_token_id`:{model.generation_config.pad_token_id} for open-end generation.")
@@ -194,10 +198,11 @@ def loadVisualModel(modelN, tokenizerN):
 	return model, processor, config
 
 
-def loadJudge(judgeN):
+def loadJudge(judge):
 	tryNum = 10
 	judgeM = None
 	judgeF = None
+	judgeN = judge.split(' ')
 	while tryNum > 0:
 		try:
 			tryNum -= 1
@@ -323,7 +328,7 @@ def gen(model, processor, prompts, maxL, doSample=False, endThink=None):
 def eval(prPair, judges):
 	allScores = {}
 	for judgeN in judges:
-		judgeM, judgeF = loadJudge(judgeN.split(' '))
+		judgeM, judgeF = loadJudge(judgeN)
 		print(judgeN)
 		meanScore = 0
 		scores = []
@@ -373,11 +378,11 @@ def loadData(dataName):
 
 def filterData(model, processor, judge, prompts, maxL, thres, endThink):
 	print('Filtering')
-	judgeM, judgeF = loadJudge(judge.split(' '))
+	judgeM, judgeF = loadJudge(judge)
 	_, scores = GenAndEval(model, processor, judgeF, prompts, maxL, doSample=False, endThink=endThink)
 	del judgeM
 	ret = []
 	for i, p in enumerate(prompts):
-		if scores[i] > thres:
+		if scores[i] >= thres:
 			ret.append(p)
 	return ret
