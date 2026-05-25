@@ -21,8 +21,8 @@ if __name__ == '__main__':
 	parser.add_argument('--embType', type=str, required=True, choices=["last", "response", "all", "prompt"])
 	parser.add_argument('--saveDir', type=str, required=True, help="The root of probe storage")
 	parser.add_argument('--judge', type=str, required=True, help="The annotator")
-	parser.add_argument('--layer', nargs='+', type=int, default=[-2], help="The interval of selected layer. Length <= 2")
-	parser.add_argument('--gpuLR', action='store_true', help="Whether to use cuml to accelerate probe training. cuml may failed because of lbfgs")
+	parser.add_argument('--layer', nargs='+', type=float, default=[-2], help="The interval of selected layer. Length <= 2")
+	parser.add_argument('--linearC', type=str, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
 	parser.add_argument('--val', action='store_true', help="Whether to conduct validation during adaptive retraining")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--filter', action='store_true', help="Whether to use StrongReject's finetuned judge to filter out benign prompts that are refused by the model")
@@ -35,16 +35,14 @@ if __name__ == '__main__':
 	# load model & processor
 	disable_caching()
 	model, processor, config = myUtil.loadModel(args.model, args.tokenizer)
-	if len(args.layer) == 1:
-		args.layer.insert(0, -config.num_hidden_layers)
 	saveDir = os.path.join(args.saveDir, args.model.replace('./', '').replace('/', '_'))
 	os.makedirs(saveDir, exist_ok=True)
 	judgeN = args.judge.split(' ')[0]
+	layerIdxs = myUtil.getLayer(config.num_hidden_layers, args.layer)
 	clfP = os.path.join(saveDir,
-						f'judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer{args.layer}_gpuLR{args.gpuLR}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
+						f'judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer[{layerIdxs[0]}, {layerIdxs[-1]}]_linearC{args.linearC}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
 							'/',
 							'-'))
-	layerIdxs = list(range(config.num_hidden_layers))[config.num_hidden_layers + args.layer[0]:config.num_hidden_layers + 1 + args.layer[1]]
 	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train')
 	if args.filter:
 		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, 512, args.thres[1], None)
@@ -62,44 +60,47 @@ if __name__ == '__main__':
 									   args.embType, None)
 	# train initial probe
 	allProbes = {}
-	probes = ProbeManager.ProbeManager()
-	probes.train(hdManager, args.gpuLR, args.normReg)
-	# wrap model
-	model = ProbeManager.wrapModel(model, probes.toMLP(args.pt), layerIdxs)
 	# get judge
 	judgeM, judgeF = myUtil.loadJudge(args.judge)
 	# model extraction starts
 	allPosScore = []
 	for i in range(args.maxIter):
+		# train
+		probes = ProbeManager.ProbeManager()
+		probes.train(hdManager, args.linearC, args.normReg)
 		print(f"\nIter {i + 1}")
-		print(f"Sample Target Prob.: {probes.getTargetProb(args.pt)}")
-		hdManager, trainCompletion, posScore = myUtil.getLLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
-												  harmTrainPrompts, processor,
-												  args.trainL,
-												  args.embType, None)  # get steered hd
-		# unwrap model
-		model = ProbeManager.unwrapModel(model)
+		
+		# validation
 		valCompletion = []
+		posScore = 0
 		if args.val:
 			print(f"Validation Target Prob.: {probes.getTargetProb(args.evalPT)}")
-			# wrap model
-			model = ProbeManager.wrapModel(model, probes.toMLP(args.evalPT), layerIdxs)
+			# hook model
+			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
 			valCompletion, allRes = myUtil.GenAndEval(model, processor, judgeF, harmValPrompts, args.trainL, False)
 			posScore = torch.tensor(allRes).float().mean().item()
-			# unwrap model
-			model = ProbeManager.unwrapModel(model)
+			# unhook model
+			for hook in hooks:
+				hook.remove()
+		
+		# sample
+		print(f"Sample Target Prob.: {probes.getTargetProb(args.pt if args.pt != 'adaptive' else str(posScore))}")
+		# hook model
+		hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.pt)
+		# get emb
+		hdManager, trainCompletion, _ = myUtil.getLLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
+														 harmTrainPrompts, processor,
+														 args.trainL,
+														 args.embType, None)  # get steered hd
+		posScore = _ if not args.val else posScore
+		# unhook model
+		for hook in hooks:
+			hook.remove()
 		allPosScore.append(posScore)
 		print(f'History: {sorted(allPosScore)}')
+		# save
 		allProbes[i] = (posScore, probes, trainCompletion, valCompletion)
-		# wrap model
-		probes = ProbeManager.ProbeManager()
-		probes.train(hdManager, args.gpuLR, args.normReg)
-		model = ProbeManager.wrapModel(model, probes.toMLP(args.pt), layerIdxs)
 		torch.save(allProbes, clfP)
+	
 	del judgeM
 	torch.save(allProbes, clfP)
-
-
-
-
-

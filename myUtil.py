@@ -1,6 +1,7 @@
 import csv
 import gc
 import json
+import math
 import os.path
 import time
 
@@ -9,7 +10,7 @@ import tqdm
 from colorama import Fore, Style
 from peft import PeftModel
 from strong_reject import evaluate, load_datasets
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Qwen3ForCausalLM
 
 import HiddenStateManager
 import myJudge
@@ -386,3 +387,16 @@ def filterData(model, processor, judge, prompts, maxL, thres, endThink):
 		if scores[i] >= thres:
 			ret.append(p)
 	return ret
+
+
+def getLayer(layerNum, layer: list):
+	assert len(layer) <= 2
+	if 0 <= layer[-1] <= 1:
+		if len(layer) < 2:
+			layer.insert(0, 0.0)
+		layerIdxs = list(range(layerNum))[math.floor(layerNum * layer[0]):max(math.floor(layerNum * layer[0]) + 1, math.ceil(layerNum * layer[1]))]
+	else:
+		if len(layer) == 1:
+			layer.insert(0, -layerNum)
+		layerIdxs = list(range(layerNum))[layerNum + int(layer[0]):layerNum + 1 + int(layer[1])]
+	return layerIdxs

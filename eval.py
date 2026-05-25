@@ -36,7 +36,7 @@ if __name__ == '__main__':
 		if args.clfP != 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
-			model = ProbeManager.wrapModel(model, probes.toMLP(args.evalPT), probes.getLayerIdxs())
+			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
 		print(probeName)
 		allComp = myUtil.gen(model, processor, prompts, args.maxL, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
 		del model

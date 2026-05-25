@@ -1,98 +1,53 @@
 import numpy as np
 import torch
-from cuml.linear_model import LogisticRegression
 from peft import PeftModel
 from sklearn.linear_model import LogisticRegression as skLR
 
 import HiddenStateManager
-from transformers import Qwen3ForCausalLM
-
-
-class SCAVAdapter(torch.nn.Module):
-	def __init__(self, hiddenSize: int) -> None:
-		super().__init__()
-		self.downProj = torch.nn.Linear(hiddenSize, 1, bias=True, dtype=torch.float32)
-		self.act = torch.nn.ReLU()
-		self.upProj = torch.nn.Linear(1, hiddenSize, bias=False, dtype=torch.float32)
-	
-	def forward(self, inputHD: torch.Tensor):
-		return inputHD + self.upProj(self.act(self.downProj(inputHD)))
-
-
-class MySequential(torch.nn.Module):
-	def __init__(self, allModule):
-		super().__init__()
-		self.allModule = allModule
-	
-	def forward(self, hiddenStates, **inputs):
-		output = self.allModule[0](hiddenStates, **inputs)
-		for i in range(1, len(self.allModule)):
-			output = self.allModule[i](output)
-		# print(output)
-		return output
-
-
-def wrapModel(model, mlps, layerIdxs):
-	baseModel = model.model if not isinstance(model, PeftModel) else model.base_model.model.model
-	if hasattr(baseModel, 'language_model'):
-		baseModel = baseModel.language_model
-	wrappedLayers = []
-	for i in range(len(baseModel.layers)):
-		if i in layerIdxs:
-			whateverPara = next(baseModel.layers[i].named_parameters())[1]
-			wrappedLayers.append(MySequential([baseModel.layers[i], mlps[i].to(whateverPara.dtype).to(whateverPara.device)]))
-		else:
-			wrappedLayers.append(baseModel.layers[i])
-	baseModel.layers = torch.nn.ModuleList(wrappedLayers)
-	return model
-
-
-def unwrapModel(model):
-	baseModel = model.model if not isinstance(model, PeftModel) else model.base_model.model.model
-	if hasattr(baseModel, 'language_model'):
-		baseModel = baseModel.language_model
-	unwrappedLayers = []
-	for i in range(len(baseModel.layers)):
-		if isinstance(baseModel.layers[i], MySequential):
-			unwrappedLayers.append(baseModel.layers[i].allModule[0])
-			del baseModel.layers[i].allModule[1]
-		else:
-			unwrappedLayers.append(baseModel.layers[i])
-	baseModel.layers = torch.nn.ModuleList(unwrappedLayers)
-	return model
+from cuml.linear_model import LogisticRegression
+from cuml.svm.linear_svc import LinearSVC
+from functools import partial
 
 
 class ProbeManager:
 	def __init__(self):
 		self.probes = {}
-		
+	
 	def getLayerIdxs(self):
 		return self.probes.keys()
 	
 	@torch.no_grad()
-	def train(self, hdManager: HiddenStateManager.HDManager, useGPU: bool, normReg: bool):
+	def train(self, hdManager: HiddenStateManager.HDManager, linearC, normReg: bool):
 		self.probes = {}
 		for layerIdx, batch in hdManager.layer2hd.items():
 			x = batch['hd'].clone().numpy()
 			C = min(1.0, 1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item()) if normReg else 1.0
 			y = batch['label'].clone().numpy()
 			totalWeight = x.shape[0]
-			posClassWeight = totalWeight / (2 * (y == 1).sum().item())
-			negClassWeight = totalWeight / (2 * (y == 0).sum().item())
 			sampleWeight = np.ones_like(y, dtype=np.float32)
+			posClassWeight = totalWeight / (2 * sampleWeight[y == 1].sum().item())
+			negClassWeight = totalWeight / (2 * sampleWeight[y == 0].sum().item())
 			sampleWeight[y == 1] *= posClassWeight
 			sampleWeight[y == 0] *= negClassWeight
-			if useGPU:
+			if sampleWeight.sum() != totalWeight:
+				print(f'Warning! sample weight sum: {sampleWeight.sum()}, yet expected total weight: {totalWeight}')
+			if linearC == 'cuLR':
 				linear = LogisticRegression(solver="qn", max_iter=10000,
 											# class_weight='balanced',
 											output_type='numpy', penalty='l2', C=C, fit_intercept=True)
 				linear.verbose = 0
-			else:
+			elif linearC == 'cuSVC':
+				linear = LinearSVC(output_type='numpy', penalty='l2', C=C, fit_intercept=True)
+				linear.verbose = 0
+			elif linearC == 'skLR':
 				linear = skLR(solver="saga", max_iter=10000,
 							  # class_weight='balanced',
 							  warm_start=True,
 							  n_jobs=16, penalty='l2', C=C, fit_intercept=True)
 				linear.verbose = 0
+			else:
+				print(f'{linearC} not implemented')
+				exit(1)
 			linear.fit(x, y, sample_weight=sampleWeight)
 			w = torch.tensor(linear.coef_, requires_grad=False)
 			b = torch.tensor(linear.intercept_, requires_grad=False)
@@ -111,21 +66,6 @@ class ProbeManager:
 		for layerIdx, probe in self.probes.items():
 			ret[layerIdx] = torch.sigmoid(torch.quantile(probe['score'], float(strength))).item() if 'abs' not in strength else torch.sigmoid(torch.tensor(float(strength.replace('abs', '')))).item()
 		return ret
-	
-	@torch.no_grad()
-	def toMLP(self, strength: str):
-		mlps = {}
-		allScores = self.getTargetScores(strength)
-		for layerIdx, probe in self.probes.items():
-			targetScore = allScores[layerIdx]
-			mlps[layerIdx] = SCAVAdapter(probe['w'].shape[1])
-			wNorm = torch.norm(probe['w'], dim=-1).item()
-			if wNorm == 0.0:
-				wNorm += 1e-6
-			mlps[layerIdx].downProj.weight.copy_(-probe['w'] / wNorm)
-			mlps[layerIdx].upProj.weight.copy_(probe['w'].T / wNorm)
-			mlps[layerIdx].downProj.bias.copy_((targetScore - probe['b']) / wNorm)
-		return mlps
 
 
 def getProbe(allProbes: dict, which):
@@ -141,3 +81,31 @@ def getProbe(allProbes: dict, which):
 		probe2test = None
 	(iterNum, (score, probes, trainCompletion, valCompletion)) = list(probe2test.items())[0]
 	return probes, f'Iter{iterNum}, {score}'
+
+
+def probeSteer(module, inputs, hd, w, b, s, wNorm):  # [B, L, D], [1, D], scalar, scalar, scalar
+	return hd + (torch.relu(s - hd @ w.T - b) / wNorm) @ (w / wNorm)
+
+
+def hookModel(model, pm: ProbeManager, layerIdxs, strength: str):
+	baseModel = model.model if not isinstance(model, PeftModel) else model.base_model.model.model
+	if hasattr(baseModel, 'language_model'):
+		baseModel = baseModel.language_model
+	hooks = []
+	strengths = pm.getTargetScores(strength)
+	for i in layerIdxs:
+		whateverPara = next(baseModel.layers[i].mlp.named_parameters())[1]
+		wNorm = torch.norm(pm.probes[i]['w'], dim=-1).item()
+		if wNorm == 0.0:
+			wNorm += 1e-6
+		hook = baseModel.layers[i].register_forward_hook(
+			partial(
+				probeSteer,
+				w=pm.probes[i]['w'].to(whateverPara),
+				b=pm.probes[i]['b'],
+				s=strengths[i],
+				wNorm=wNorm
+			)
+		)
+		hooks.append(hook)
+	return hooks
