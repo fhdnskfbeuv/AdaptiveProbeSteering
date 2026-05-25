@@ -6,27 +6,27 @@ This is a repository containing our method only.
 
 You can generate probes by running ```iterSCAV.py```. For example, run:
 ```commandline
-CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --maxIter 20 --trainL 256 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.6 --gpuLR --evalPT "1" --pt "abs0" --embType last --val
+CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --maxIter 20 --trainL 256 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.6 --linearC cuLR --evalPT "1" --pt "abs0" --embType last --val
 ```
 Below are the arguments of ```iterSCAV.py```:
 
-| Argument | Type | Required           | Default | Choices | Description |
-|--------|------|--------------------|---------|---------|-------------|
-| `--model` | `str` | ✅ Yes              | — | — | The repository name on Hugging Face. |
-| `--tokenizer` | `str` | ❌ No               | — | — | Some repositories do not provide a tokenizer; specify the repository containing the tokenizer here. |
-| `--pt` | `str` | ✅ Yes              | — | — | If using percentile-based target logits, provide a float between `0` and `1` (e.g., `"1.0"`). To specify exact target logits, use `"abs[float]"` (e.g., `"abs0"`). |
-| `--evalPT` | `str` | ✅ Yes if val==True | — | — | If using percentile-based target logits, provide a float between `0` and `1` (e.g., `"1.0"`). To specify exact target logits, use `"abs[float]"` (e.g., `"abs0"`). |
-| `--thres` | `float` (multi) | ✅ Yes               | — | — | Lower and upper thresholds for the annotator (e.g., `0.05 0.6`). |
-| `--maxIter` | `int` | ✅ Yes               | — | — | Maximum number of iterations for adaptive retraining. |
-| `--trainL` | `int` | ✅ Yes               | — | — | Maximum number of new tokens allowed during adaptive retraining. |
-| `--embType` | `str` | ✅ Yes               | — | `last`, `response`, `all`, `prompt` | Type of embedding to use. |
-| `--saveDir` | `str` | ✅ Yes               | — | — | Root directory for storing trained probes. |
-| `--judge` | `str` | ✅ Yes               | — | — | Annotator model used for evaluation or labeling. |
-| `--layer` | `int` (multi) | ❌ No               | `[-2]` | — | Indices of transformer layers to use. Accepts one or two values defining an interval. |
-| `--gpuLR` | flag | ❌ No               | `False` | — | Whether to use cuML to accelerate probe training (may fail with LBFGS). |
-| `--val` | flag | ❌ No               | `False` | — | Whether to perform validation during adaptive retraining. |
-| `--normReg` | flag | ❌ No               | `False` | — | Whether to dynamically adjust regularization strength based on input norms. |
-| `--filter` | flag | ❌ No               | `False` | — | Whether to use StrongReject’s fine-tuned judge to filter benign prompts that the model refuses. |
+| Argument | Type | Required           | Default | Choices                           | Description                                                                                                                                                       |
+|--------|------|--------------------|---------|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--model` | `str` | ✅ Yes              | —       | —                                 | The repository name on Hugging Face.                                                                                                                              |
+| `--tokenizer` | `str` | ❌ No               | —       | —                                 | Some repositories do not provide a tokenizer; specify the repository containing the tokenizer here.                                                               |
+| `--pt` | `str` | ✅ Yes              | —       | —                                 | If using percentile-based target logits, provide a float between `0` and `1` (e.g., `"1.0"`). To specify exact target logits, use `"abs[float]"` (e.g., `"abs0"`). |
+| `--evalPT` | `str` | ✅ Yes if val==True | —       | —                                 | If using percentile-based target logits, provide a float between `0` and `1` (e.g., `"1.0"`). To specify exact target logits, use `"abs[float]"` (e.g., `"abs0"`). |
+| `--thres` | `float` (multi) | ✅ Yes               | —       | —                                 | Lower and upper thresholds for the annotator (e.g., `0.05 0.6`).                                                                                                  |
+| `--maxIter` | `int` | ✅ Yes               | —       | —                                 | Maximum number of iterations for adaptive retraining.                                                                                                             |
+| `--trainL` | `int` | ✅ Yes               | —       | —                                 | Maximum number of new tokens allowed during adaptive retraining.                                                                                                  |
+| `--embType` | `str` | ✅ Yes               | —       | `last`, `response`, `all`, `prompt` | Type of embedding to use.                                                                                                                                         |
+| `--saveDir` | `str` | ✅ Yes               | —       | —                                 | Root directory for storing trained probes.                                                                                                                        |
+| `--judge` | `str` | ✅ Yes               | —       | —                                 | Annotator model used for evaluation or labeling.                                                                                                                  |
+| `--layer` | `int` (multi) | ❌ No               | `[-2]`  | —                                 | Indices of transformer layers to use. Accepts one or two values defining an interval.                                                                             |
+| `--linearC` | flag | ✅ Yes               | `True`  | `cuLR`, `cuSVC`, `skLR`]          | The type of linear model.                                                                                                                                         |
+| `--val` | flag | ❌ No               | `False` | —                                 | Whether to perform validation during adaptive retraining.                                                                                                         |
+| `--normReg` | flag | ❌ No               | `False` | —                                 | Whether to dynamically adjust regularization strength based on input norms.                                                                                       |
+| `--filter` | flag | ❌ No               | `False` | —                                 | Whether to use StrongReject’s fine-tuned judge to filter benign prompts that the model refuses.                                                                   |
 
 ## Evaluating Probe-based Steering
 

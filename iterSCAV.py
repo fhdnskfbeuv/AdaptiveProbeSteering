@@ -22,7 +22,7 @@ if __name__ == '__main__':
 	parser.add_argument('--saveDir', type=str, required=True, help="The root of probe storage")
 	parser.add_argument('--judge', type=str, required=True, help="The annotator")
 	parser.add_argument('--layer', nargs='+', type=float, default=[-2], help="The interval of selected layer. Length <= 2")
-	parser.add_argument('--linearC', type=str, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
+	parser.add_argument('--linearC', type=str, required=True, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
 	parser.add_argument('--val', action='store_true', help="Whether to conduct validation during adaptive retraining")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--filter', action='store_true', help="Whether to use StrongReject's finetuned judge to filter out benign prompts that are refused by the model")
