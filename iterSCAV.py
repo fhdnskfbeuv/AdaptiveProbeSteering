@@ -86,7 +86,7 @@ if __name__ == '__main__':
 		# sample
 		print(f"Sample Target Prob.: {probes.getTargetProb(args.pt if args.pt != 'adaptive' else str(posScore))}")
 		# hook model
-		hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.pt)
+		hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.pt if args.pt != 'adaptive' else str(posScore))
 		# get emb
 		hdManager, trainCompletion, _ = myUtil.getLLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
 														 harmTrainPrompts, processor,
