@@ -1,6 +1,6 @@
 # Code of the method proposed in "Adaptive Probe-based Steering for Robust LLM Jailbreaking"
 
-This is a repository containing our method only. The probe-based steering is implemented by inserting MLP adapters (see ```ProbeManager.py```) rather than hooks, which we believe is more elegant.
+This is a repository containing our method only.
 
 ## Generating Probes
 
