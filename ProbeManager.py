@@ -29,7 +29,6 @@ class ProbeManager:
 			negClassWeight = totalWeight / (2 * sampleWeight[y == 0].sum().item())
 			sampleWeight[y == 1] *= posClassWeight
 			sampleWeight[y == 0] *= negClassWeight
-			print(f'pos: {(y == 1).sum().item()}; neg: {(y == 0).sum().item()}')
 			if linearC == 'cuLR':
 				linear = LogisticRegression(solver="qn", max_iter=10000,
 											# class_weight='balanced',
