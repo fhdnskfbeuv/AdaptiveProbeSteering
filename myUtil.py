@@ -254,7 +254,7 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 			avgScore += score
 			pbar.set_description(f"{Fore.RED}Average Score: {avgScore / len(completions)}; Current Score: {score}{Style.RESET_ALL}")
 			pbar.update()
-			if score < biThres[1] and score > biThres[0]:  # not sure
+			if biThres[1] > score > biThres[0]:  # not sure
 				continue
 			label = int(score >= biThres[1])
 			for j in layerIdxs:  # loop for each layer
