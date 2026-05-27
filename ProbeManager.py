@@ -98,6 +98,8 @@ def hookModel(model, pm: ProbeManager, layerIdxs, strength):
 		whateverPara = next(baseModel.layers[i].mlp.named_parameters())[1]
 		wNorm = torch.norm(pm.probes[i]['w'], dim=-1).to(whateverPara)
 		wNorm[wNorm == 0.0] = 1e-6
+		if isinstance(pm.probes[i]['b'], float):
+			pm.probes[i]['b'] = torch.tensor(pm.probes[i]['b'])
 		hook = baseModel.layers[i].register_forward_hook(
 			partial(
 				probeSteer,

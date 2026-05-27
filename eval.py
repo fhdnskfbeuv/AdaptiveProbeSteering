@@ -47,3 +47,5 @@ if __name__ == '__main__':
 			valueLine.append(torch.tensor(v).float().mean().item())
 		with open(args.csvP.replace('.csv', f'_{args.evalPT}.csv'), 'a+', newline='') as f:
 			csv.writer(f).writerows([headerLine, valueLine])
+		if args.clfP != 'None':
+			torch.save(allProbes, args.clfP)
