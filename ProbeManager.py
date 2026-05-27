@@ -1,3 +1,6 @@
+import copy
+from collections import OrderedDict
+
 import numpy as np
 import torch
 from peft import PeftModel
@@ -20,9 +23,9 @@ class ProbeManager:
 	def train(self, hdManager: HiddenStateManager.HDManager, linearC, normReg: bool):
 		self.probes = {}
 		for layerIdx, batch in hdManager.layer2hd.items():
-			x = batch['hd'].clone().numpy()
-			C = min(1.0, 1.0 / torch.norm(batch['hd'].float(), dim=-1).mean().item()) if normReg else 1.0
-			y = batch['label'].clone().numpy()
+			x = batch['hd'].clone().detach().numpy()
+			C = torch.norm(batch['hd'].float(), dim=-1).mean().item() if normReg else 1.0
+			y = batch['label'].clone().detach().numpy()
 			totalWeight = x.shape[0]
 			sampleWeight = np.ones_like(y, dtype=np.float32)
 			posClassWeight = totalWeight / (2 * sampleWeight[y == 1].sum().item())
@@ -50,12 +53,12 @@ class ProbeManager:
 			w = torch.tensor(linear.coef_, requires_grad=False)
 			b = torch.tensor(linear.intercept_, requires_grad=False)
 			score = (batch['hd'][y == 1, :].cuda().float() @ w.T.cuda().float() + b.cuda().float()).squeeze(-1)  # (B, )
-			self.probes[layerIdx] = {'w': w, 'b': b.item(), 'score': score}  # (1, D), scaler, (B, )
+			self.probes[layerIdx] = {'w': w, 'b': b, 'score': score}  # (1, D), (1, ), (B, )
 	
 	def getTargetScores(self, strength: str):
 		ret = {}
 		for layerIdx, probe in self.probes.items():
-			ret[layerIdx] = torch.quantile(probe['score'], float(strength)).item() if 'abs' not in strength else float(strength.replace('abs', ''))
+			ret[layerIdx] = torch.quantile(probe['score'], float(strength)) if 'abs' not in strength else torch.tensor(float(strength.replace('abs', '')))
 		return ret
 	
 	@torch.no_grad()
@@ -81,29 +84,29 @@ def getProbe(allProbes: dict, which):
 	return probes, f'Iter{iterNum}, {score}'
 
 
-def probeSteer(module, inputs, hd, w, b, s, wNorm):  # [B, L, D], [1, D], scalar, scalar, scalar
-	return hd + (torch.relu(s - hd @ w.T - b) / wNorm) @ (w / wNorm)
+def probeSteer(module, inputs, outputs, w, b, s, wNorm):  # [B, L, D], [1, D], [1, ], [1, ], [1, ]
+	return outputs + (torch.relu(s - outputs @ w.T - b) / wNorm) @ (w / wNorm)
 
 
-def hookModel(model, pm: ProbeManager, layerIdxs, strength: str):
+def hookModel(model, pm: ProbeManager, layerIdxs, strength):
 	baseModel = model.model if not isinstance(model, PeftModel) else model.base_model.model.model
 	if hasattr(baseModel, 'language_model'):
 		baseModel = baseModel.language_model
 	hooks = []
-	strengths = pm.getTargetScores(strength)
+	strengths = pm.getTargetScores(strength) if isinstance(strength, str) else copy.deepcopy(strength)
 	for i in layerIdxs:
 		whateverPara = next(baseModel.layers[i].mlp.named_parameters())[1]
-		wNorm = torch.norm(pm.probes[i]['w'], dim=-1).item()
-		if wNorm == 0.0:
-			wNorm += 1e-6
+		wNorm = torch.norm(pm.probes[i]['w'], dim=-1).to(whateverPara)
+		wNorm[wNorm == 0.0] = 1e-6
 		hook = baseModel.layers[i].register_forward_hook(
 			partial(
 				probeSteer,
 				w=pm.probes[i]['w'].to(whateverPara),
-				b=pm.probes[i]['b'],
-				s=strengths[i],
-				wNorm=wNorm
+				b=pm.probes[i]['b'].to(whateverPara),
+				s=strengths[i].to(whateverPara),
+				wNorm=wNorm.to(whateverPara)
 			)
 		)
+		baseModel.layers[i]._forward_hooks.move_to_end(hook.id, last=False)  # my hook comes first
 		hooks.append(hook)
 	return hooks

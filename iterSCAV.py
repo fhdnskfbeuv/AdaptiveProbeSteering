@@ -1,13 +1,12 @@
 import argparse
 import os
-import shutil
 
+import torch
 from datasets import disable_caching
 
 import HiddenStateManager
-import myUtil
 import ProbeManager
-import torch
+import myUtil
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
@@ -82,7 +81,6 @@ if __name__ == '__main__':
 			# unhook model
 			for hook in hooks:
 				hook.remove()
-		
 		# sample
 		print(f"Sample Target Prob.: {probes.getTargetProb(args.pt if args.pt != 'adaptive' else str(posScore))}")
 		# hook model
@@ -102,5 +100,3 @@ if __name__ == '__main__':
 		allProbes[i] = (posScore, probes, trainCompletion, valCompletion)
 		torch.save(allProbes, clfP)
 	
-	del judgeM
-	torch.save(allProbes, clfP)
