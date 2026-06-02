@@ -1,5 +1,5 @@
 import copy
-from collections import OrderedDict
+from functools import partial
 
 import numpy as np
 import torch
@@ -9,7 +9,6 @@ from sklearn.linear_model import LogisticRegression as skLR
 import HiddenStateManager
 from cuml.linear_model import LogisticRegression
 from cuml.svm.linear_svc import LinearSVC
-from functools import partial
 
 
 class ProbeManager:
@@ -24,7 +23,7 @@ class ProbeManager:
 		self.probes = {}
 		for layerIdx, batch in hdManager.layer2hd.items():
 			x = batch['hd'].clone().detach().numpy()
-			C = torch.norm(batch['hd'].float(), dim=-1).mean().item() if normReg else 1.0
+			C = min(1.0, 1 / torch.norm(batch['hd'].float(), dim=-1).mean().item()) if normReg else 1.0
 			y = batch['label'].clone().detach().numpy()
 			totalWeight = x.shape[0]
 			sampleWeight = np.ones_like(y, dtype=np.float32)
@@ -58,14 +57,20 @@ class ProbeManager:
 	def getTargetScores(self, strength: str):
 		ret = {}
 		for layerIdx, probe in self.probes.items():
-			ret[layerIdx] = torch.quantile(probe['score'], float(strength)) if 'abs' not in strength else torch.tensor(float(strength.replace('abs', '')))
+			if strength == 'mean':
+				ret[layerIdx] = torch.mean(probe['score'])
+			else:
+				ret[layerIdx] = torch.quantile(probe['score'], float(strength)) if 'abs' not in strength else torch.tensor(float(strength.replace('abs', '')))
 		return ret
 	
 	@torch.no_grad()
 	def getTargetProb(self, strength: str):
 		ret = {}
 		for layerIdx, probe in self.probes.items():
-			ret[layerIdx] = torch.sigmoid(torch.quantile(probe['score'], float(strength))).item() if 'abs' not in strength else torch.sigmoid(torch.tensor(float(strength.replace('abs', '')))).item()
+			if strength == 'mean':
+				ret[layerIdx] = torch.sigmoid(torch.mean(probe['score']))
+			else:
+				ret[layerIdx] = torch.sigmoid(torch.quantile(probe['score'], float(strength))).item() if 'abs' not in strength else torch.sigmoid(torch.tensor(float(strength.replace('abs', '')))).item()
 		return ret
 
 
@@ -84,8 +89,18 @@ def getProbe(allProbes: dict, which):
 	return probes, f'Iter{iterNum}, {score}'
 
 
-def probeSteer(module, inputs, outputs, w, b, s, wNorm):  # [B, L, D], [1, D], [1, ], [1, ], [1, ]
-	return outputs + (torch.relu(s - outputs @ w.T - b) / wNorm) @ (w / wNorm)
+class Switch:
+	def __init__(self, enable):
+		self.enable: bool = enable
+		
+	def remove(self):
+		pass
+
+
+def probeSteer(module, inputs, outputs, w, b, s, wNorm, switch: Switch):  # [B, L, D], [1, D], [1, ], [1, ], [1, ]
+	if switch.enable:
+		return outputs + (torch.relu(s - outputs @ w.T - b) / wNorm) @ (w / wNorm)
+	return outputs
 
 
 def hookModel(model, pm: ProbeManager, layerIdxs, strength):
@@ -94,6 +109,7 @@ def hookModel(model, pm: ProbeManager, layerIdxs, strength):
 		baseModel = baseModel.language_model
 	hooks = []
 	strengths = pm.getTargetScores(strength) if isinstance(strength, str) else copy.deepcopy(strength)
+	switch = Switch(enable=True)
 	for i in layerIdxs:
 		whateverPara = next(baseModel.layers[i].mlp.named_parameters())[1]
 		wNorm = torch.norm(pm.probes[i]['w'], dim=-1).to(whateverPara)
@@ -106,9 +122,11 @@ def hookModel(model, pm: ProbeManager, layerIdxs, strength):
 				w=pm.probes[i]['w'].to(whateverPara),
 				b=pm.probes[i]['b'].to(whateverPara),
 				s=strengths[i].to(whateverPara),
-				wNorm=wNorm.to(whateverPara)
+				wNorm=wNorm.to(whateverPara),
+				switch=switch
 			)
 		)
 		baseModel.layers[i]._forward_hooks.move_to_end(hook.id, last=False)  # my hook comes first
 		hooks.append(hook)
+	hooks.append(switch)
 	return hooks

@@ -16,15 +16,14 @@ if __name__ == '__main__':
 	parser.add_argument('--evalPT', type=str, help="If you want to use the percentile to determine target logits, type in a float [0, 1] (e.g., \"1.0\"). If you want to specify the target logits, type in \"abs[float]\" (e.g., \"abs0\")")
 	parser.add_argument('--thres', type=float, required=True, nargs='+', help="The low and the high threshold for the annotator (e.g., 0.05 0.6)")
 	parser.add_argument('--maxIter', type=int, required=True, help="The maximum iteration of adaptive retraining")
+	parser.add_argument('--bs', type=int, default=1, help="Batch size")
 	parser.add_argument('--trainL', type=int, required=True, help="the max new token during adaptive retraining")
-	parser.add_argument('--bs', type=int, default=1, help="batch size")
 	parser.add_argument('--embType', type=str, required=True)
 	parser.add_argument('--saveDir', type=str, required=True, help="The root of probe storage")
 	parser.add_argument('--judge', type=str, required=True, help="The annotator")
 	parser.add_argument('--layer', nargs='+', type=float, default=[-2], help="The interval of selected layer. Length <= 2")
 	parser.add_argument('--linearC', type=str, required=True, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
 	parser.add_argument('--val', action='store_true', help="Whether to conduct validation during adaptive retraining")
-	parser.add_argument('--full', action='store_true', help="Whether to use all data")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--filter', action='store_true', help="Whether to use StrongReject's finetuned judge to filter out benign prompts that are refused by the model")
 	args = parser.parse_args()
@@ -35,30 +34,30 @@ if __name__ == '__main__':
 	
 	# load model & processor
 	disable_caching()
-	model, processor, config = myUtil.loadModel(args.model, args.tokenizer)
+	model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer)
 	saveDir = os.path.join(args.saveDir, args.model.replace('./', '').replace('/', '_'))
 	os.makedirs(saveDir, exist_ok=True)
 	judgeN = args.judge.split(' ')[0]
-	layerIdxs = myUtil.getLayer(config.num_hidden_layers, args.layer)
+	layerIdxs = myUtil.getLayer(config.text_config.num_hidden_layers, args.layer)
 	clfP = os.path.join(saveDir,
-						f'full{args.full}_judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer[{layerIdxs[0]}, {layerIdxs[-1]}]_linearC{args.linearC}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
+						f'judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer[{layerIdxs[0]}, {layerIdxs[-1]}]_linearC{args.linearC}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
 							'/',
 							'-'))
-	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train', args.full)
+	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train')
 	if args.filter:
 		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, 512, args.bs, args.thres[1], None)
 	# get initial embd
 	hdManager = HiddenStateManager.HDManager(layerIdxs)
 	# get the hd you don't prefer
-	hdManager, _, _ = myUtil.getLLMEmb(model, hdManager, lambda x, y: 0.0, args.thres, layerIdxs,
+	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: 0.0, args.thres, layerIdxs,
 									   harmTrainPrompts, processor,
-									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1, args.bs,
-									   args.embType, None, None)
+									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1,
+									   args.bs, args.embType, None, None)
 	# get the hd you prefer
-	hdManager, _, _ = myUtil.getLLMEmb(model, hdManager, lambda x, y: 1.0, args.thres, layerIdxs,
+	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: 1.0, args.thres, layerIdxs,
 									   benignTrainPrompts, processor,
-									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1, args.bs,
-									   args.embType, None, None)
+									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1,
+									   args.bs, args.embType, None, None)
 	# train initial probe
 	allProbes = {}
 	# get judge
@@ -78,7 +77,7 @@ if __name__ == '__main__':
 			print(f"Validation Target Prob.: {probes.getTargetProb(args.evalPT)}")
 			# hook model
 			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
-			valCompletion, allRes = myUtil.GenAndEval(model, processor, judgeF, harmValPrompts, args.trainL, args.bs, False)
+			valCompletion, allRes = myUtil.GenAndEvalLVLM(model, processor, judgeF, harmValPrompts, args.trainL, args.bs, None, False)
 			posScore = torch.tensor(allRes).float().mean().item()
 			# unhook model
 			for hook in hooks:
@@ -88,7 +87,7 @@ if __name__ == '__main__':
 		# hook model
 		hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.pt if args.pt != 'adaptive' else str(posScore))
 		# get emb
-		hdManager, trainCompletion, _ = myUtil.getLLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
+		hdManager, trainCompletion, _ = myUtil.getLVLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
 														 harmTrainPrompts, processor,
 														 args.trainL, args.bs,
 														 args.embType, hooks, None)  # get steered hd

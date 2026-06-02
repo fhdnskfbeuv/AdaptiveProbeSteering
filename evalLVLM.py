@@ -17,7 +17,7 @@ if __name__ == '__main__':
 	parser.add_argument('--clfP', type=str, default='None', help="The path to probes")
 	parser.add_argument('--evalClfr', type=str, choices=['all', 'first', 'last', 'best'], help="Which probe to use? We recommend \'best\'")
 	parser.add_argument('--maxL', type=int, required=True, help="The max new token for generation")
-	parser.add_argument('--bs', type=int, required=True, help="Batch size")
+	parser.add_argument('--bs', type=int, default=1, help="Batch size")
 	parser.add_argument('--doSample', action='store_true', help="Whether to do sample")
 	parser.add_argument('--answerOnly', action='store_true', help="Whether to discard CoT")
 	parser.add_argument('--judge', type=str, nargs='+', help="Judges to use")
@@ -32,14 +32,14 @@ if __name__ == '__main__':
 	headerLine = ['Dataset', 'Model', 'Sample', 'evalPT', 'ClfP', 'evalClfr', 'maxL', 'answerOnly']
 	valueLine = [args.evalData, args.model, args.doSample, args.evalPT, os.path.split(args.clfP)[-1], args.evalClfr, args.maxL, args.answerOnly]
 	with torch.no_grad():
-		model, processor, config = myUtil.loadModel(args.model, args.tokenizer)
+		model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer)
 		probeName = 'None'
 		if args.clfP != 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
 			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
 		print(probeName)
-		allComp = myUtil.gen(model, processor, prompts, args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
+		allComp = myUtil.genLVLM(model, processor, prompts, [None] * len(prompts), args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
 		del model
 		torch.cuda.empty_cache()
 		allScores = myUtil.eval([(p, r) for p, r in zip(prompts, allComp)], args.judge)

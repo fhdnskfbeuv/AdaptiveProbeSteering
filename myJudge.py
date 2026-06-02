@@ -36,7 +36,7 @@ class SJRubricAPI:
 						{'role': 'user', 'content': sjTemplate["strongreject_rubric"].format(forbidden_prompt=prompt, response=response)}
 					],
 					temperature=0,  # One interesting thing is that these APIs are usually non-deterministic
-					extra_body={"enable_thinking": False},
+					extra_body={"enable_thinking": False, "thinking": {"type": "disabled"}},
 				)
 				result = completion.choices[0].message.content
 				# print(completion)
