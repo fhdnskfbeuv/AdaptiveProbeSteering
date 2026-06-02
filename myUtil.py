@@ -232,7 +232,7 @@ def loadJudge(judge):
 
 def getStartAndEnd(attentionMask, outputIDs, processor):  # (B, L) aligned with input, end points to the last input
 	startIdxs = attentionMask.argmax(dim=-1)
-	eos_positions = (outputIDs == processor.eos_token_id).int().argmax(dim=-1)
+	eos_positions = (outputIDs == processor.eos_token_id).int().argmax(dim=-1) - 1
 	has_eos = (outputIDs == processor.eos_token_id).any(dim=-1)
 	endIdxs = torch.where(
 		has_eos,
@@ -293,18 +293,18 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 					if embType == 'last':
 						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float().clone().cpu()
 					elif 'top' in embType and hooks is not None:
-						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :].float() for t in range(len(hiddenStates))], dim=0)[importantIndices[i], :], dim=0, keepdim=True).clone().cpu()
+						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True).cpu()
 					elif 'top' in embType and hooks is None:
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					elif embType == 'prompt':
 						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True).clone().cpu()
 					elif embType == 'response':
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					elif embType == 'all':
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[startIdxs[i]:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[startIdxs[i]:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
@@ -368,18 +368,18 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 					if embType == 'last':
 						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float().clone().cpu()
 					elif 'top' in embType and hooks is not None:
-						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :].float() for t in range(len(hiddenStates))], dim=0)[importantIndices[i], :], dim=0, keepdim=True).clone().cpu()
+						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True).cpu()
 					elif 'top' in embType and hooks is None:
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					elif embType == 'prompt':
 						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True).clone().cpu()
 					elif embType == 'response':
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					elif embType == 'all':
-						hd = torch.concat([hiddenStates[t][j + 1][i, :, :].float() for t in range(len(hiddenStates))], dim=0)[startIdxs[i]:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).clone().cpu()
+						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[startIdxs[i]:endIdxs[i] + 1, :]
+						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
