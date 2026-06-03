@@ -230,14 +230,14 @@ def loadJudge(judge):
 	return judgeM, judgeF
 
 
-def getStartAndEnd(attentionMask, outputIDs, processor):  # (B, L) aligned with input, end points to the last input
+def getStartAndEnd(attentionMask, allIDs, inputLen, processor):  # (B, L) aligned with input, end points to the last input
 	startIdxs = attentionMask.argmax(dim=-1)
-	eos_positions = (outputIDs == processor.eos_token_id).int().argmax(dim=-1) - 1
-	has_eos = (outputIDs == processor.eos_token_id).any(dim=-1)
+	eos_positions = (allIDs[:, inputLen:] == processor.eos_token_id).int().argmax(dim=-1) - 1 + inputLen
+	has_eos = (allIDs[:, inputLen:] == processor.eos_token_id).any(dim=-1)
 	endIdxs = torch.where(
 		has_eos,
 		eos_positions,
-		outputIDs.shape[1] - 2
+		allIDs.shape[1] - 2
 	)
 	return startIdxs, endIdxs  # (B,)
 
@@ -266,7 +266,7 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 			hiddenStates = output.hidden_states  # [maxL, layers + 1, B, L, D]
 			generated_ids = output.sequences  # (B, L + 1 because shift)
 			labels = []
-			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, processor)
+			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor)
 			for i in range(generated_ids.shape[0]):
 				completion = processor.batch_decode(
 					[generated_ids[i][inputs['input_ids'][i].shape[0]:]], skip_special_tokens=True, clean_up_tokenization_spaces=False
@@ -341,7 +341,7 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 			hiddenStates = output.hidden_states  # [maxL, layers + 1, 1, L, D]
 			generated_ids = output.sequences
 			labels = []
-			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, processor)
+			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor)
 			for i in range(generated_ids.shape[0]):
 				completion = processor.batch_decode(
 					[generated_ids[i][inputs['input_ids'][i].shape[0]:]], skip_special_tokens=True, clean_up_tokenization_spaces=False

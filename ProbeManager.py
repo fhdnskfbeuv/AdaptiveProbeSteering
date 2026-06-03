@@ -48,6 +48,9 @@ class ProbeManager:
 			else:
 				print(f'{linearC} not implemented')
 				exit(1)
+			print('x', np.isnan(x).any())
+			print('y', np.isnan(y).any())
+			print('sampleWeight', np.isnan(sampleWeight).any())
 			linear.fit(x, y, sample_weight=sampleWeight)
 			w = torch.tensor(linear.coef_, requires_grad=False)
 			b = torch.tensor(linear.intercept_, requires_grad=False)
