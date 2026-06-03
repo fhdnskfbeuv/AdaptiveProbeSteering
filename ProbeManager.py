@@ -48,9 +48,6 @@ class ProbeManager:
 			else:
 				print(f'{linearC} not implemented')
 				exit(1)
-			print('x', np.isnan(x).any())
-			print('y', np.isnan(y).any())
-			print('sampleWeight', np.isnan(sampleWeight).any())
 			linear.fit(x, y, sample_weight=sampleWeight)
 			w = torch.tensor(linear.coef_, requires_grad=False)
 			b = torch.tensor(linear.intercept_, requires_grad=False)
@@ -71,7 +68,7 @@ class ProbeManager:
 		ret = {}
 		for layerIdx, probe in self.probes.items():
 			if strength == 'mean':
-				ret[layerIdx] = torch.sigmoid(torch.mean(probe['score']))
+				ret[layerIdx] = torch.sigmoid(torch.mean(probe['score'])).item()
 			else:
 				ret[layerIdx] = torch.sigmoid(torch.quantile(probe['score'], float(strength))).item() if 'abs' not in strength else torch.sigmoid(torch.tensor(float(strength.replace('abs', '')))).item()
 		return ret
