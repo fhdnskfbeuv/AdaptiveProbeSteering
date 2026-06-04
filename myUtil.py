@@ -6,12 +6,13 @@ import math
 import os.path
 import time
 
+import numpy as np
 import torch
 import tqdm
 from colorama import Fore, Style
 from peft import PeftModel
 from strong_reject import evaluate, load_datasets
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Qwen3ForCausalLM, Gemma4Processor
 
 import HiddenStateManager
 import myJudge
@@ -59,9 +60,8 @@ model2thinkend = {
 	'Qwen/Qwen3.5-35B-A3B': "</think>",
 	'Qwen/Qwen3.6-35B-A3B': "</think>",
 	'CMU-AIRe/TARS-7B': "</think>",
-	'google/gemma-4-E2B-it': "<channel|>",
-	'openai/gpt-oss-20b': "<|end|>",
 	'wangzhang/Qwen3.5-35B-A3B-abliterated': "</think>",
+	'Qwen/Qwen3.6-27B': "</think>"
 }
 
 
@@ -230,10 +230,10 @@ def loadJudge(judge):
 	return judgeM, judgeF
 
 
-def getStartAndEnd(attentionMask, allIDs, inputLen, processor):  # (B, L) aligned with input, end points to the last input
+def getStartAndEnd(attentionMask, allIDs, inputLen, eosID):  # (B, L) aligned with input, end points to the last input
 	startIdxs = attentionMask.argmax(dim=-1)
-	eos_positions = (allIDs[:, inputLen:] == processor.eos_token_id).int().argmax(dim=-1) - 1 + inputLen
-	has_eos = (allIDs[:, inputLen:] == processor.eos_token_id).any(dim=-1)
+	eos_positions = (allIDs[:, inputLen:] == eosID).int().argmax(dim=-1) - 1 + inputLen
+	has_eos = (allIDs[:, inputLen:] == eosID).any(dim=-1)
 	endIdxs = torch.where(
 		has_eos,
 		eos_positions,
@@ -246,6 +246,7 @@ def getStartAndEnd(attentionMask, allIDs, inputLen, processor):  # (B, L) aligne
 def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None):
 	completions = []
 	avgScore = 0
+	allScores = []
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {0.0}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
 			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
@@ -265,22 +266,18 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 									return_dict_in_generate=True, do_sample=False)
 			hiddenStates = output.hidden_states  # [maxL, layers + 1, B, L, D]
 			generated_ids = output.sequences  # (B, L + 1 because shift)
-			labels = []
-			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor)
-			for i in range(generated_ids.shape[0]):
-				completion = processor.batch_decode(
-					[generated_ids[i][inputs['input_ids'][i].shape[0]:]], skip_special_tokens=True, clean_up_tokenization_spaces=False
-				)[0]
-				completions.append(completion)
-				score = judgeF(batchedPrompts[i], completion)
-				avgScore += score
-				pbar.set_description(f"{Fore.RED}Average Score: {avgScore / len(completions)}; Current Score: {score}{Style.RESET_ALL}")
+			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor.eos_token_id)
+			batchCompletions = processor.batch_decode(generated_ids[:, inputs['input_ids'][0].shape[0]:],
+													  skip_special_tokens=True, clean_up_tokenization_spaces=False)
+			completions += batchCompletions
+			batchScores = judgeF(batchedPrompts, batchCompletions)
+			allScores += batchScores
+			avgScore = np.array(allScores).mean().item()
+			for i in range(len(batchedPrompts)):
+				pbar.set_description(f"{Fore.RED}Average Score: {avgScore}; Current Score: {batchScores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
-				if biThres[1] > score > biThres[0]:  # not sure
-					labels.append(-1)
-				else:
-					labels.append(int(score >= biThres[1]))
+			labels = [-1 if (biThres[1] > score > biThres[0]) else int(score >= biThres[1]) for score in batchScores]
 			if 'top' in embType and hooks is not None:
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
@@ -309,13 +306,14 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 						print(f'{embType} not implemented')
 						exit(1)
 					hdManager.add(j, hd, [labels[i]] * hd.shape[0])
-	return hdManager, completions, avgScore / len(completions)
+	return hdManager, completions, avgScore
 
 
 @torch.no_grad()
 def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None):
 	completions = []
 	avgScore = 0
+	allScores = []
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {0.0}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
 			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
@@ -340,22 +338,18 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 									return_dict_in_generate=True, do_sample=False)
 			hiddenStates = output.hidden_states  # [maxL, layers + 1, 1, L, D]
 			generated_ids = output.sequences
-			labels = []
-			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor)
-			for i in range(generated_ids.shape[0]):
-				completion = processor.batch_decode(
-					[generated_ids[i][inputs['input_ids'][i].shape[0]:]], skip_special_tokens=True, clean_up_tokenization_spaces=False
-				)[0]
-				completions.append(completion)
-				score = judgeF(batchedPrompts[i], completion)
-				avgScore += score
-				pbar.set_description(f"{Fore.RED}Average Score: {avgScore / len(completions)}; Current Score: {score}{Style.RESET_ALL}")
+			startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor.tokenizer.eos_token_id)
+			batchCompletions = processor.batch_decode(generated_ids[:, inputs['input_ids'][0].shape[0]:],
+													  skip_special_tokens=True, clean_up_tokenization_spaces=False)
+			completions += batchCompletions
+			batchScores = judgeF(batchedPrompts, batchCompletions)
+			allScores += batchScores
+			avgScore = np.array(allScores).mean().item()
+			for i in range(len(batchedPrompts)):
+				pbar.set_description(f"{Fore.RED}Average Score: {avgScore}; Current Score: {batchScores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
-				if biThres[1] > score > biThres[0]:  # not sure
-					labels.append(-1)
-				else:
-					labels.append(int(score >= biThres[1]))
+			labels = [-1 if (biThres[1] > score > biThres[0]) else int(score >= biThres[1]) for score in batchScores]
 			if 'top' in embType and hooks is not None:
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
@@ -441,41 +435,43 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 	return fullStrs, completions
 
 
-def GenAndEval(model, processor, judge, prompts, maxL, batchSize, doSample=False, endThink=None):
+def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=None):
 	allCompletion = []
 	allScores = []
 	meanScore = 0
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
-			fullStrs, completions = easyGen(model, processor, prompts[left:min(len(prompts), left + batchSize)], maxL, doSample, endThink)
+			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
+			fullStrs, completions = easyGen(model, processor, batchedPrompts, maxL, doSample, endThink)
 			allCompletion += completions
-			for prompt, completion in zip(prompts[left:min(len(prompts), left + batchSize)], completions):
-				score = judge(prompt, completion)
-				allScores.append(score)
-				meanScore = torch.tensor(allScores).float().mean().item()
-				pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {allScores[-1]};){Style.RESET_ALL}")
+			scores = judgeF(batchedPrompts, completions)
+			allScores += scores
+			meanScore = np.array(allScores).mean().item()
+			for i in range(len(batchedPrompts)):
+				pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {scores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
 	return allCompletion, allScores
 
 
-def GenAndEvalLVLM(model, processor, judge, prompts, maxL, batchSize, imgs=None, doSample=False, endThink=None):
+def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None, doSample=False, endThink=None):
 	allCompletion = []
 	allScores = []
 	meanScore = 0
 	imgs = imgs if imgs is not None else [None] * len(prompts)
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
 		for left in range(min(0, len(prompts), batchSize)):
+			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
 			fullStrs, completions = easyLVLMGen(model, processor,
-												prompts[left:min(len(prompts), left + batchSize)],
+												batchedPrompts,
 												imgs[left:min(len(prompts), left + batchSize)],
 												maxL, doSample, False, endThink)
-			for prompt, completion in zip(prompt, completions):
-				score = judge(prompt, completion)
-				allCompletion.append(completion)
-				allScores.append(score)
-				meanScore = torch.tensor(allScores).float().mean().item()
-				pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {allScores[-1]};){Style.RESET_ALL}")
+			allCompletion += completions
+			scores = judgeF(batchedPrompts, completions)
+			allScores += scores
+			meanScore = np.array(allScores).mean().item()
+			for i in range(len(batchedPrompts)):
+				pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {scores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
 	return allCompletion, allScores
@@ -485,7 +481,8 @@ def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=Non
 	allCompletion = []
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
-			fullStrs, completions = easyGen(model, processor, prompts[left:min(len(prompts), left + batchSize)], maxL, doSample, endThink)
+			batchedPrompt = prompts[left:min(len(prompts), left + batchSize)]
+			fullStrs, completions = easyGen(model, processor, batchedPrompt, maxL, doSample, endThink)
 			for completion in completions:
 				allCompletion.append(completion)
 				pbar.update()
@@ -498,9 +495,11 @@ def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, en
 	imgs = imgs if imgs is not None else [None] * len(prompts)
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
+			batchedPrompt = prompts[left:min(len(prompts), left + batchSize)]
+			batchedImg = imgs[left:min(len(prompts), left + batchSize)]
 			fullStrs, completions = easyLVLMGen(model, processor,
-												prompts[left:min(len(prompts), left + batchSize)],
-												imgs[left:min(len(prompts), left + batchSize)],
+												batchedPrompt,
+												batchedImg,
 												maxL, doSample, False, endThink)
 			for completion in completions:
 				allCompletion.append(completion)
@@ -509,21 +508,25 @@ def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, en
 	return allCompletion
 
 
-def eval(prPair, judges):
+def eval(prompts, responses, judges, batchSize):
 	allScores = {}
+	assert len(prompts) == len(responses)
 	for judgeN in judges:
 		judgeM, judgeF = loadJudge(judgeN)
 		print(judgeN)
 		meanScore = 0
 		scores = []
-		with tqdm.tqdm(prPair, total=len(prPair), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
-			for prompt, response in prPair:
-				score = judgeF(prompt, response)
-				scores.append(score)
-				meanScore = torch.tensor(scores).float().mean().item()
-				pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {scores[-1]};){Style.RESET_ALL}")
-				pbar.update()
-				pbar.refresh()
+		with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
+			for left in range(0, len(prompts), batchSize):
+				batchedPrompt = prompts[left:min(len(prompts), left + batchSize)]
+				batchedResponses = responses[left:min(len(responses), left + batchSize)]
+				batchedScores = judgeF(batchedPrompt, batchedResponses)
+				scores += batchedScores
+				meanScore = np.array(scores).mean().item()
+				for i in range(len(batchedScores)):
+					pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {batchedScores[i]};){Style.RESET_ALL}")
+					pbar.update()
+					pbar.refresh()
 		allScores[judgeN.split(' ')[0]] = scores
 		if judgeM is not None:
 			del judgeM

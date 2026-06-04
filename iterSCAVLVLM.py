@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 
 import torch
@@ -9,6 +10,7 @@ import ProbeManager
 import myUtil
 
 if __name__ == '__main__':
+	logging.getLogger("transformers.processing_utils").setLevel(logging.ERROR)
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--model', type=str, required=True, help="The repo name on huggingface")
 	parser.add_argument('--tokenizer', type=str, help="Some repos do not provide tokenizer. So you have to give the repo that contain the tokenizer")
@@ -49,12 +51,12 @@ if __name__ == '__main__':
 	# get initial embd
 	hdManager = HiddenStateManager.HDManager(layerIdxs)
 	# get the hd you don't prefer
-	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: 0.0, args.thres, layerIdxs,
+	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: [0.0] * len(x), args.thres, layerIdxs,
 									   harmTrainPrompts, processor,
 									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1,
 									   args.bs, args.embType, None, None)
 	# get the hd you prefer
-	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: 1.0, args.thres, layerIdxs,
+	hdManager, _, _ = myUtil.getLVLMEmb(model, hdManager, lambda x, y: [1.0] * len(x), args.thres, layerIdxs,
 									   benignTrainPrompts, processor,
 									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1,
 									   args.bs, args.embType, None, None)
@@ -66,26 +68,25 @@ if __name__ == '__main__':
 	allPosScore = []
 	for i in range(args.maxIter):
 		# train
-		probes = ProbeManager.ProbeManager()
-		probes.train(hdManager, args.linearC, args.normReg)
+		probes = ProbeManager.train(hdManager, args.linearC, args.normReg)
 		print(f"\nIter {i + 1}")
 		
 		# validation
 		valCompletion = []
 		posScore = 0
 		if args.val:
-			print(f"Validation Target Prob.: {probes.getTargetProb(args.evalPT)}")
+			print(f"Validation Target Prob.: {ProbeManager.getTargetProb(probes, args.evalPT)}")
 			# hook model
-			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
+			hooks = ProbeManager.hookModel(model, probes, args.evalPT)
 			valCompletion, allRes = myUtil.GenAndEvalLVLM(model, processor, judgeF, harmValPrompts, args.trainL, args.bs, None, False)
 			posScore = torch.tensor(allRes).float().mean().item()
 			# unhook model
 			for hook in hooks:
 				hook.remove()
 		# sample
-		print(f"Sample Target Prob.: {probes.getTargetProb(args.pt if args.pt != 'adaptive' else str(posScore))}")
+		print(f"Sample Target Prob.: {ProbeManager.getTargetProb(probes, args.pt if args.pt != 'adaptive' else str(posScore))}")
 		# hook model
-		hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.pt if args.pt != 'adaptive' else str(posScore))
+		hooks = ProbeManager.hookModel(model, probes, args.pt if args.pt != 'adaptive' else str(posScore))
 		# get emb
 		hdManager, trainCompletion, _ = myUtil.getLVLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
 														 harmTrainPrompts, processor,

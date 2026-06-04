@@ -37,12 +37,12 @@ if __name__ == '__main__':
 		if args.clfP != 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
-			hooks = ProbeManager.hookModel(model, probes, probes.getLayerIdxs(), args.evalPT)
+			hooks = ProbeManager.hookModel(model, probes, args.evalPT)
 		print(probeName)
 		allComp = myUtil.gen(model, processor, prompts, args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
 		del model
 		torch.cuda.empty_cache()
-		allScores = myUtil.eval([(p, r) for p, r in zip(prompts, allComp)], args.judge)
+		allScores = myUtil.eval(prompts, allComp, args.judge, args.bs)
 		for k, v in allScores.items():
 			headerLine.append(probeName + ';' + k)
 			valueLine.append(torch.tensor(v).float().mean().item())
