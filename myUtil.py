@@ -12,10 +12,12 @@ import tqdm
 from colorama import Fore, Style
 from peft import PeftModel
 from strong_reject import evaluate, load_datasets
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Qwen3ForCausalLM, Gemma4Processor
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Gemma4UnifiedProcessor
 
 import HiddenStateManager
 import myJudge
+
+USE_PROCESSOR = "use_processor"
 
 customizedChatTemplate = {  # We hope authors of models below provide official jinja-format chat template :(
 	'Youliang/llama3-8b-instruct-lora-derta-100step': """{{ bos_token }}{% for message in messages %}{% if message['role'] == 'user' %}[INST] {{ message['content'] }} [/INST]{% else %}{% endif %}{% endfor %}""",
@@ -31,28 +33,6 @@ lora2base = {
 	"thkim0305/RepBend_Mistral_7B_LoRA": "mistralai/Mistral-7B-Instruct-v0.2"
 }
 
-nameMap = {
-	'thu-coai/Mistral-7B-Instruct-v0.2-safeunlearning': 'Mistral-SU',
-	'thu-coai/vicuna-7b-v1.5-safeunlearning': 'Vicuna-SU',
-	'lapisrocks/Llama-3-8B-Instruct-TAR-Refusal': 'Llama3-TAR',
-	'GraySwanAI/Llama-3-8B-Instruct-RR': 'Llama3-CB',
-	'cais/zephyr_7b_r2d2': 'R2D2',
-	'Unispac/Llama2-7B-Chat-Augmented': 'Llama2-DA',
-	'LLM-LAT/robust-llama3-8b-instruct': 'Llama3-LAT',
-	'thkim0305/RepBend_Mistral_7B': 'Mistral-RB',
-	'thkim0305/RepBend_Llama3_8B': 'Llama3-RB',
-	"GraySwanAI/Mistral-7B-Instruct-RR": 'Mistral-CB',
-	'Unispac/Gemma-2-9B-IT-With-Deeper-Safety-Alignment': 'Gemma-DA',
-	'Youliang/llama3-8b-instruct-lora-derta-100step': 'Llama3-DeRTA',
-	"PawanKrd/Meta-Llama-3-8B-Instruct": 'Llama-3-8B-Instruct',
-	'meta-llama/Llama-2-7b-chat-hf': 'Llama-2-7b-chat',
-	"Qwen/Qwen3-4B-Instruct-2507": 'Qwen3-4B-Instruct',
-	"Qwen/Qwen2.5-14B-Instruct": "Qwen2.5-14B-Instruct",
-	"lmsys/vicuna-7b-v1.5": "Vicuna-7b-v1.5",
-	"mistralai/Mistral-7B-Instruct-v0.2": "Mistral-7B-Instruct-v0.2",
-	"google/gemma-2-9b-it": "Gemma-2-9b-it"
-}
-
 model2thinkend = {
 	'Qwen/Qwen3-4B-Thinking-2507': "</think>",
 	'zai-org/GLM-4.6V-Flash': "</think>",
@@ -61,7 +41,9 @@ model2thinkend = {
 	'Qwen/Qwen3.6-35B-A3B': "</think>",
 	'CMU-AIRe/TARS-7B': "</think>",
 	'wangzhang/Qwen3.5-35B-A3B-abliterated': "</think>",
-	'Qwen/Qwen3.6-27B': "</think>"
+	'Qwen/Qwen3.6-27B': "</think>",
+	'google/gemma-4-12B-it': USE_PROCESSOR,
+	'google/gemma-4-E2B-it': USE_PROCESSOR
 }
 
 
@@ -109,7 +91,7 @@ def loadDataset(dirP, harmTrain, benignTrain, harmVal, benignVal, full=False, tr
 	}
 
 
-def loadModel(modelN, tokenizerN):
+def loadModel(modelN, tokenizerN, trust_remote_code=False):
 	tryNum = 10
 	modelN = modelN
 	tokenizerN = tokenizerN
@@ -119,15 +101,21 @@ def loadModel(modelN, tokenizerN):
 			if modelN in lora2base.keys():
 				print(f'{modelN} has an adapter! Loading now.')
 				model = AutoModelForCausalLM.from_pretrained(
-					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto"
+					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
+					trust_remote_code=trust_remote_code
 				)
-				model = PeftModel.from_pretrained(model, modelN, adapter_name="default")
-				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None))
+				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
+												  trust_remote_code=trust_remote_code)
+				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
 			else:
 				model = AutoModelForCausalLM.from_pretrained(modelN, dtype=torch.bfloat16, token=os.getenv('HF_TOKEN', default=None),
-															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto")
-				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None))
-			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None))
+															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto",
+															 trust_remote_code=trust_remote_code)
+				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
+			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None),
+													  trust_remote_code=trust_remote_code)
 			processor.padding_side = 'left'
 			if 'r2d2' in modelN.lower():
 				processor.chat_template = '{{ bos_token }}' + processor.chat_template
@@ -139,6 +127,7 @@ def loadModel(modelN, tokenizerN):
 													return_tensors="pt",
 													return_dict=True,
 													add_generation_prompt=True)['input_ids']
+			print(f'{Fore.RED} {modelN}: {type(model)} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
@@ -158,7 +147,7 @@ def loadModel(modelN, tokenizerN):
 	return model, processor, config
 
 
-def loadVisualModel(modelN, tokenizerN):
+def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 	tryNum = 10
 	while tryNum > 0:
 		try:
@@ -166,24 +155,31 @@ def loadVisualModel(modelN, tokenizerN):
 			if modelN in lora2base.keys():
 				print(f'{modelN} has adapter! Loading now.')
 				model = AutoModelForImageTextToText.from_pretrained(
-					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto"
+					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
+					trust_remote_code=trust_remote_code
 				)
-				model = PeftModel.from_pretrained(model, modelN, adapter_name="default")
-				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None))
+				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
+												  trust_remote_code=trust_remote_code)
+				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
 			else:
 				model = AutoModelForImageTextToText.from_pretrained(modelN, dtype=torch.bfloat16, token=os.getenv('HF_TOKEN', default=None),
-																	attn_implementation="sdpa", device_map="auto")
-				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None))
-			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None), use_fast_image_processor=True)
+																	attn_implementation="sdpa", device_map="auto",
+																	trust_remote_code=trust_remote_code)
+				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
+			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None), use_fast_image_processor=True,
+													  trust_remote_code=trust_remote_code)
 			processor.tokenizer.padding_side = 'left'
 			for k in customizedChatTemplate.keys():
 				if k in modelN:
 					processor.chat_template = customizedChatTemplate[k]
-			example = processor.apply_chat_template([{"role": "user", "content": [{'type': 'image'}, {'type': 'text', "text": '{Instruct}'}]}],
+			example = processor.apply_chat_template([{"role": "user", "content": [{'type': 'text', "text": '{Instruct}'}]}],
 													tokenize=True,
 													return_tensors="pt",
 													return_dict=True,
 													add_generation_prompt=True)['input_ids']
+			print(f'{Fore.RED} {modelN}: {type(model)} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
@@ -230,6 +226,7 @@ def loadJudge(judge):
 	return judgeM, judgeF
 
 
+@torch.no_grad()
 def getStartAndEnd(attentionMask, allIDs, inputLen, eosID):  # (B, L) aligned with input, end points to the last input
 	startIdxs = attentionMask.argmax(dim=-1)
 	eos_positions = (allIDs[:, inputLen:] == eosID).int().argmax(dim=-1) - 1 + inputLen
@@ -378,9 +375,10 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 						print(f'{embType} not implemented')
 						exit(1)
 					hdManager.add(j, hd, [labels[i]] * hd.shape[0])
-	return hdManager, completions, avgScore / len(completions)
+	return hdManager, completions, avgScore
 
 
+@torch.no_grad()
 def easyGen(model, processor, prompts: list[str], maxL=128, doSample=False, endThink=None):
 	queries = [[{"role": "user", "content": prompt}] for prompt in prompts]
 	inputs = processor.apply_chat_template(queries,
@@ -395,16 +393,20 @@ def easyGen(model, processor, prompts: list[str], maxL=128, doSample=False, endT
 	for i in range(len(generated_ids)):
 		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:])
 	completions = processor.batch_decode(
-		trimmedIDs, skip_special_tokens=True, clean_up_tokenization_spaces=False
+		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR) else False, clean_up_tokenization_spaces=False
 	)
 	fullStrs = processor.batch_decode(
 		generated_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
 	)
 	if endThink is not None:
-		completions = [completion.split(endThink)[-1] for completion in completions]
+		if endThink == USE_PROCESSOR:
+			completions = [processor.parse_response(completion)["response"] for completion in completions]
+		else:
+			completions = [completion.split(endThink)[-1] for completion in completions]
 	return fullStrs, completions
 
 
+@torch.no_grad()
 def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSample=False, rawCompletion=False, endThink=None):
 	queries = [[
 		{
@@ -425,16 +427,20 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 	for i in range(len(generated_ids)):
 		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:])
 	completions = processor.batch_decode(
-		trimmedIDs, skip_special_tokens=True, clean_up_tokenization_spaces=False
+		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR) else False, clean_up_tokenization_spaces=False
 	)
 	fullStrs = processor.batch_decode(
 		generated_ids, skip_special_tokens=not rawCompletion, clean_up_tokenization_spaces=False
 	)
 	if endThink is not None:
-		completions = [completion.split(endThink)[-1] for completion in completions]
+		if endThink == USE_PROCESSOR:
+			completions = [processor.parse_response(completion)["response"] for completion in completions]
+		else:
+			completions = [completion.split(endThink)[-1] for completion in completions]
 	return fullStrs, completions
 
 
+@torch.no_grad()
 def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=None):
 	allCompletion = []
 	allScores = []
@@ -454,13 +460,14 @@ def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=Fals
 	return allCompletion, allScores
 
 
+@torch.no_grad()
 def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None, doSample=False, endThink=None):
 	allCompletion = []
 	allScores = []
 	meanScore = 0
 	imgs = imgs if imgs is not None else [None] * len(prompts)
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
-		for left in range(min(0, len(prompts), batchSize)):
+		for left in range(0, len(prompts), batchSize):
 			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
 			fullStrs, completions = easyLVLMGen(model, processor,
 												batchedPrompts,
@@ -477,6 +484,7 @@ def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None
 	return allCompletion, allScores
 
 
+@torch.no_grad()
 def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=None):
 	allCompletion = []
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
@@ -490,6 +498,7 @@ def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=Non
 	return allCompletion
 
 
+@torch.no_grad()
 def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, endThink=None):
 	allCompletion = []
 	imgs = imgs if imgs is not None else [None] * len(prompts)
@@ -508,26 +517,40 @@ def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, en
 	return allCompletion
 
 
+@torch.no_grad()
 def eval(prompts, responses, judges, batchSize):
 	allScores = {}
 	assert len(prompts) == len(responses)
 	for judgeN in judges:
 		judgeM, judgeF = loadJudge(judgeN)
 		print(judgeN)
-		meanScore = 0
-		scores = []
-		with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
-			for left in range(0, len(prompts), batchSize):
-				batchedPrompt = prompts[left:min(len(prompts), left + batchSize)]
-				batchedResponses = responses[left:min(len(responses), left + batchSize)]
-				batchedScores = judgeF(batchedPrompt, batchedResponses)
-				scores += batchedScores
-				meanScore = np.array(scores).mean().item()
-				for i in range(len(batchedScores)):
-					pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {batchedScores[i]};){Style.RESET_ALL}")
-					pbar.update()
-					pbar.refresh()
-		allScores[judgeN.split(' ')[0]] = scores
+		success = False
+		initialBs = copy.deepcopy(batchSize)
+		while success is False:
+			try:
+				meanScore = 0
+				scores = []
+				with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
+					for left in range(0, len(prompts), initialBs):
+						batchedPrompt = prompts[left:min(len(prompts), left + initialBs)]
+						batchedResponses = responses[left:min(len(responses), left + initialBs)]
+						batchedScores = judgeF(batchedPrompt, batchedResponses)
+						scores += batchedScores
+						meanScore = np.array(scores).mean().item()
+						for i in range(len(batchedScores)):
+							pbar.set_description(f"{Fore.RED}Average Score: {meanScore}; Current Score: {batchedScores[i]};){Style.RESET_ALL}")
+							pbar.update()
+							pbar.refresh()
+				success = True
+				allScores[judgeN.split(' ')[0]] = scores
+			except torch.cuda.OutOfMemoryError as e:
+				print(e)
+				if initialBs == 1:
+					print('Input is too long.')
+					success = True
+				initialBs = max(1, initialBs // 2)
+				gc.collect()
+				torch.cuda.empty_cache()
 		if judgeM is not None:
 			del judgeM
 			torch.cuda.empty_cache()
@@ -564,6 +587,7 @@ def loadData(dataName, full=False):
 	return prompts
 
 
+@torch.no_grad()
 def filterData(model, processor, judge, prompts, maxL, batchSize, thres, endThink):
 	print('Filtering')
 	judgeM, judgeF = loadJudge(judge)
@@ -589,6 +613,7 @@ def getLayer(layerNum, layer: list):
 	return layerIdxs
 
 
+@torch.no_grad()
 def getInputsAndLabels(processor, prompt, target, img):
 	inputNoTarget = processor.apply_chat_template(
 		[
@@ -619,6 +644,7 @@ def getInputsAndLabels(processor, prompt, target, img):
 	return inputWithTarget, label
 
 
+@torch.no_grad()
 def top_p(probs: torch.Tensor, p: float) -> torch.Tensor:
 	sorted_probs, sorted_indices = torch.sort(probs, descending=True)
 	cumulative_probs = torch.cumsum(sorted_probs, dim=0)
@@ -629,6 +655,7 @@ def top_p(probs: torch.Tensor, p: float) -> torch.Tensor:
 	return selected_sorted_indices
 
 
+@torch.no_grad()
 def tokenImportanceKL(model, processor, fullOutput, originalInput, mode, kp, labels):
 	with torch.no_grad():
 		retIndices = []

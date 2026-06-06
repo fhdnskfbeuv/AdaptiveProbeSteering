@@ -25,6 +25,7 @@ if __name__ == '__main__':
 	parser.add_argument('--judge', type=str, required=True, help="The annotator")
 	parser.add_argument('--layer', nargs='+', type=float, default=[-2], help="The interval of selected layer. Length <= 2")
 	parser.add_argument('--linearC', type=str, required=True, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
+	parser.add_argument('--trust', action='store_true', help="Trust remote code?")
 	parser.add_argument('--val', action='store_true', help="Whether to conduct validation during adaptive retraining")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--filter', action='store_true', help="Whether to use StrongReject's finetuned judge to filter out benign prompts that are refused by the model")
@@ -36,7 +37,7 @@ if __name__ == '__main__':
 	
 	# load model & processor
 	disable_caching()
-	model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer)
+	model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer, args.trust)
 	saveDir = os.path.join(args.saveDir, args.model.replace('./', '').replace('/', '_'))
 	os.makedirs(saveDir, exist_ok=True)
 	judgeN = args.judge.split(' ')[0]
@@ -84,9 +85,9 @@ if __name__ == '__main__':
 			for hook in hooks:
 				hook.remove()
 		# sample
-		print(f"Sample Target Prob.: {ProbeManager.getTargetProb(probes, args.pt if args.pt != 'adaptive' else str(posScore))}")
+		print(f"Sample Target Prob.: {ProbeManager.getTargetProb(probes, args.pt)}")
 		# hook model
-		hooks = ProbeManager.hookModel(model, probes, args.pt if args.pt != 'adaptive' else str(posScore))
+		hooks = ProbeManager.hookModel(model, probes, args.pt)
 		# get emb
 		hdManager, trainCompletion, _ = myUtil.getLVLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
 														 harmTrainPrompts, processor,

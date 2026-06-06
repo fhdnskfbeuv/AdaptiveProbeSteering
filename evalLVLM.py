@@ -20,6 +20,7 @@ if __name__ == '__main__':
 	parser.add_argument('--bs', type=int, default=1, help="Batch size")
 	parser.add_argument('--doSample', action='store_true', help="Whether to do sample")
 	parser.add_argument('--answerOnly', action='store_true', help="Whether to discard CoT")
+	parser.add_argument('--trust', action='store_true', help="Trust remote code?")
 	parser.add_argument('--judge', type=str, nargs='+', help="Judges to use")
 	parser.add_argument('--evalData', type=str, required=True, choices=['sr', 'harmbench', 'harm'], help="Which benchmark to use")
 	args = parser.parse_args()
@@ -32,7 +33,7 @@ if __name__ == '__main__':
 	headerLine = ['Dataset', 'Model', 'Sample', 'evalPT', 'ClfP', 'evalClfr', 'maxL', 'answerOnly']
 	valueLine = [args.evalData, args.model, args.doSample, args.evalPT, os.path.split(args.clfP)[-1], args.evalClfr, args.maxL, args.answerOnly]
 	with torch.no_grad():
-		model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer)
+		model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer, args.trust)
 		probeName = 'None'
 		if args.clfP != 'None':
 			allProbes = torch.load(args.clfP, map_location='cpu', weights_only=False)
