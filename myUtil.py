@@ -12,7 +12,7 @@ import tqdm
 from colorama import Fore, Style
 from peft import PeftModel
 from strong_reject import evaluate, load_datasets
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Gemma4UnifiedProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText
 
 import HiddenStateManager
 import myJudge
@@ -100,25 +100,27 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 			tryNum -= 1
 			if modelN in lora2base.keys():
 				print(f'{modelN} has an adapter! Loading now.')
+				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
 				model = AutoModelForCausalLM.from_pretrained(
 					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
 					trust_remote_code=trust_remote_code
 				)
 				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
 												  trust_remote_code=trust_remote_code)
-				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
-													trust_remote_code=trust_remote_code)
 			else:
-				model = AutoModelForCausalLM.from_pretrained(modelN, dtype=torch.bfloat16, token=os.getenv('HF_TOKEN', default=None),
-															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto",
-															 trust_remote_code=trust_remote_code)
 				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
+				model = AutoModelForCausalLM.from_pretrained(modelN, dtype='auto', token=os.getenv('HF_TOKEN', default=None),
+															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto",
+															 trust_remote_code=trust_remote_code)
+			if model.dtype == torch.float32:  # Are you mad?
+				model = model.to(torch.bfloat16)
 			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None),
 													  trust_remote_code=trust_remote_code)
 			processor.padding_side = 'left'
 			if 'r2d2' in modelN.lower():
-				processor.chat_template = '{{ bos_token }}' + processor.chat_template
+				processor.chat_template = '{{ bos_token -}}' + processor.chat_template
 			for k in customizedChatTemplate.keys():
 				if k in modelN:
 					processor.chat_template = customizedChatTemplate[k]
@@ -127,7 +129,7 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 													return_tensors="pt",
 													return_dict=True,
 													add_generation_prompt=True)['input_ids']
-			print(f'{Fore.RED} {modelN}: {type(model)} {Style.RESET_ALL}')
+			print(f'{Fore.RED} {modelN}: {type(model)}; dtype: {model.dtype}{Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
@@ -154,20 +156,22 @@ def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 			tryNum -= 1
 			if modelN in lora2base.keys():
 				print(f'{modelN} has adapter! Loading now.')
+				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
+													trust_remote_code=trust_remote_code)
 				model = AutoModelForImageTextToText.from_pretrained(
 					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
 					trust_remote_code=trust_remote_code
 				)
 				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
 												  trust_remote_code=trust_remote_code)
-				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
-													trust_remote_code=trust_remote_code)
 			else:
-				model = AutoModelForImageTextToText.from_pretrained(modelN, dtype=torch.bfloat16, token=os.getenv('HF_TOKEN', default=None),
-																	attn_implementation="sdpa", device_map="auto",
-																	trust_remote_code=trust_remote_code)
 				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
+				model = AutoModelForImageTextToText.from_pretrained(modelN, dtype='auto', token=os.getenv('HF_TOKEN', default=None),
+																	attn_implementation="sdpa", device_map="auto",
+																	trust_remote_code=trust_remote_code)
+			if model.dtype == torch.float32:  # Are you mad?
+				model = model.to(torch.bfloat16)
 			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None), use_fast_image_processor=True,
 													  trust_remote_code=trust_remote_code)
 			processor.tokenizer.padding_side = 'left'
@@ -179,7 +183,7 @@ def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 													return_tensors="pt",
 													return_dict=True,
 													add_generation_prompt=True)['input_ids']
-			print(f'{Fore.RED} {modelN}: {type(model)} {Style.RESET_ALL}')
+			print(f'{Fore.RED} {modelN}: {type(model)}; dtype: {model.dtype} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.batch_decode(example, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]} {Style.RESET_ALL}')
 			print(f'{Fore.RED} {modelN}\'s chat template: {processor.tokenizer.convert_ids_to_tokens(example[0])} {Style.RESET_ALL}')
 			model.generation_config.use_cache = True
@@ -279,30 +283,35 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
 				hooks[-1].enable = True
-			for i in range(generated_ids.shape[0]):
-				if labels[i] == -1:
-					continue
-				# print(f'Select {len(importantIndices[0])} tokens: {importantIndices}')
-				for j in layerIdxs:  # loop for each layer
+			
+			for j in layerIdxs:  # loop for each layer
+				layerLabels = []
+				layerHDs = []
+				for i in range(generated_ids.shape[0]):
+					if labels[i] == -1:
+						continue
 					if embType == 'last':
-						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float().clone().cpu()
+						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float()
 					elif 'top' in embType and hooks is not None:
-						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True).cpu()
+						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True)
 					elif 'top' in embType and hooks is None:
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					elif embType == 'prompt':
-						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True).clone().cpu()
+						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True)
 					elif embType == 'response':
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					elif embType == 'all':
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[startIdxs[i]:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
-					hdManager.add(j, hd, [labels[i]] * hd.shape[0])
+					layerLabels += [labels[i]] * hd.shape[0]
+					layerHDs.append(hd)
+				if len(layerHDs) > 0:
+					hdManager.add(j, torch.concat(layerHDs, dim=0).cpu(), layerLabels)
 	return hdManager, completions, avgScore
 
 
@@ -351,30 +360,34 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
 				hooks[-1].enable = True
-			for i in range(generated_ids.shape[0]):
-				if labels[i] == -1:
-					continue
-				# print(f'Select {len(importantIndices[0])} tokens: {importantIndices}')
-				for j in layerIdxs:  # loop for each layer
+			for j in layerIdxs:  # loop for each layer
+				layerLabels = []
+				layerHDs = []
+				for i in range(generated_ids.shape[0]):
+					if labels[i] == -1:
+						continue
 					if embType == 'last':
-						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float().clone().cpu()
+						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float()
 					elif 'top' in embType and hooks is not None:
-						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True).cpu()
+						hd = torch.mean(torch.concat([hiddenStates[t][j + 1][i:i + 1, -1, :] for t in range(len(hiddenStates))], dim=0).float()[importantIndices[i], :], dim=0, keepdim=True)
 					elif 'top' in embType and hooks is None:
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					elif embType == 'prompt':
-						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True).clone().cpu()
+						hd = torch.mean(hiddenStates[0][j + 1][i, startIdxs[i]:, :].float(), dim=0, keepdim=True)
 					elif embType == 'response':
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[inputs['input_ids'][i].shape[0] - 1:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					elif embType == 'all':
 						hd = torch.concat([hiddenStates[t][j + 1][i, :, :] for t in range(len(hiddenStates))], dim=0).float()[startIdxs[i]:endIdxs[i] + 1, :]
-						hd = torch.mean(hd, dim=0, keepdim=True).cpu()
+						hd = torch.mean(hd, dim=0, keepdim=True)
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
-					hdManager.add(j, hd, [labels[i]] * hd.shape[0])
+					layerLabels += [labels[i]] * hd.shape[0]
+					layerHDs.append(hd)
+				if len(layerHDs) > 0:
+					hdManager.add(j, torch.concat(layerHDs, dim=0).cpu(), layerLabels)
 	return hdManager, completions, avgScore
 
 
@@ -427,7 +440,7 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 	for i in range(len(generated_ids)):
 		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:])
 	completions = processor.batch_decode(
-		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR) else False, clean_up_tokenization_spaces=False
+		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR or rawCompletion) else False, clean_up_tokenization_spaces=False
 	)
 	fullStrs = processor.batch_decode(
 		generated_ids, skip_special_tokens=not rawCompletion, clean_up_tokenization_spaces=False
@@ -499,7 +512,7 @@ def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=Non
 
 
 @torch.no_grad()
-def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, endThink=None):
+def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, endThink=None, rawCompletion=False):
 	allCompletion = []
 	imgs = imgs if imgs is not None else [None] * len(prompts)
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
@@ -509,7 +522,7 @@ def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, en
 			fullStrs, completions = easyLVLMGen(model, processor,
 												batchedPrompt,
 												batchedImg,
-												maxL, doSample, False, endThink)
+												maxL, doSample, rawCompletion, endThink)
 			for completion in completions:
 				allCompletion.append(completion)
 				pbar.update()

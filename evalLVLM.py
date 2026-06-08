@@ -1,5 +1,6 @@
 import argparse
 import csv
+import logging
 import os
 
 import torch
@@ -9,6 +10,7 @@ import ProbeManager
 import myUtil
 
 if __name__ == '__main__':
+	logging.getLogger("transformers.processing_utils").setLevel(logging.ERROR)
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--model', type=str, required=True, help="The repo name on huggingface")
 	parser.add_argument('--tokenizer', type=str, help="Some repos do not provide tokenizer. So you have to give the repo that contain the tokenizer")

@@ -27,7 +27,7 @@ if __name__ == '__main__':
 	parser.add_argument('--full', action='store_true', help="Whether to use all data")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--trust', action='store_true', help="Trust remote code?")
-	parser.add_argument('--filter', action='store_true', help="Whether to use StrongReject's finetuned judge to filter out benign prompts that are refused by the model")
+	parser.add_argument('--filter', type=float, help="To filter out benign prompts that are refused by the model")
 	args = parser.parse_args()
 	print(args)
 	assert args.thres[1] >= args.thres[0] and args.thres[1] <= 1.0 and args.thres[0] >= 0.0
@@ -46,8 +46,8 @@ if __name__ == '__main__':
 							'/',
 							'-'))
 	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train', args.full)
-	if args.filter:
-		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, 512, args.bs, args.thres[1], None)
+	if args.filter is not None:
+		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, args.trainL, args.bs, args.filter, None)
 	# get initial embd
 	hdManager = HiddenStateManager.HDManager(layerIdxs)
 	# get the hd you don't prefer
