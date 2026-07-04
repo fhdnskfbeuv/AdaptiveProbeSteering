@@ -10,7 +10,7 @@ We provide some probes at [HuggingFace](https://huggingface.co/FTK11558). You ca
 
 You can generate probes by running ```iterSCAV.py```. For example, run:
 ```commandline
-CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --bs 25 --maxIter 20 --trainL 256 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.8 --linearC cuLR --evalPT "1" --pt "mean" --embType last --train "rd" --val "rdVal" --normReg
+CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --bs 50 --maxIter 50 --trainL 512 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.8 --linearC cuSVC --evalPT "1" --pt "mean" --embType last --train "rd" --val "rdVal"
 ```
 ## Evaluating Probe-based Steering
 
