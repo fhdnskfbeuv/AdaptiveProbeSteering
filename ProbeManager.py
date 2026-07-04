@@ -48,12 +48,6 @@ def train(hdManager: HiddenStateManager.HDManager, linearC, normReg: bool, tb: b
 			for incelIndex in incelIndexes:
 				sampleWeight[y == incelIndex] *= incelWeight / (2 * len(incelIndexes) * np.sum(sampleWeight[y == incelIndex]))
 			sampleWeight[y == 0] *= incelWeight / (2 * np.sum(sampleWeight[y == 0]))
-			
-			# if len(incelIndex) > 0:
-			# 	incelIndex = np.array(incelIndex, dtype=np.long)
-			# else:
-			# oriWeightSum = np.sum(sampleWeight[y == un]).item()
-			# sampleWeight[y == un] *= totalNegWeight / (uniqueNeg.shape[0] * oriWeightSum) if oriWeightSum != 0 else 0
 		y[posIndex] = 1
 		y[negIndex] = 0
 		if linearC == 'cuLR':
