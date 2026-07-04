@@ -4,19 +4,19 @@ This is a repository containing our method only.
 
 ## Pretrained Probes at HF
 
-We provide some probes at [HuggingFace](https://huggingface.co/collections/FTK11558/aps-jailbreak). You can directly load them with ```from_pretrained```. For high performance implementation like vllm, I suggest writing a custom model that has an MLP, equivalent to probe steering, after each selected layer's FFN.
+We provide some probes at [HuggingFace](https://huggingface.co/FTK11558). You can directly load them with ```from_pretrained```. You can also load them with vllm. 
 
 ## Generating Probes
 
 You can generate probes by running ```iterSCAV.py```. For example, run:
 ```commandline
-CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --bs 32 --maxIter 200 --trainL 256 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.8 --linearC cuSVC --evalPT "1" --pt "mean" --embType response --val
+CUDA_VISIBLE_DEVICES="0" python iterSCAV.py --judge srf --bs 25 --maxIter 20 --trainL 256 --layer -2 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --saveDir ./iterSCAVWeight --thres 0.05 0.8 --linearC cuLR --evalPT "1" --pt "mean" --embType last --train "rd" --val "rdVal" --normReg
 ```
 ## Evaluating Probe-based Steering
 
 After training the probes, you can evaluate the probe-based steering by running ```eval.py```. For example, run
 ```commandline
-CUDA_VISIBLE_DEVICES="7" python eval.py --evalData sr --bs 32 --maxL 512 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --evalPT "1" --clfP "./iterSCAVWeight/GraySwanAI_Mistral-7B-Instruct-RR/fullFalse_judgesrf_embTypelast_filterFalse_normRegFalse_layer[0, 30]_linearCcuSVC_maxIter200_trainL512_ptmean_softThres[0.05, 0.8].pt" --csvP myRes.csv --evalClfr 'best' --judge "srf" "hb" "qwen-plus https://dashscope.aliyuncs.com/compatible-mode/v1 sk-xxxxx"
+CUDA_VISIBLE_DEVICES="7" python eval.py --evalData sr --bs 25 --maxL 512 --model 'GraySwanAI/Mistral-7B-Instruct-RR' --evalPT "1" --clfP "path_to_probe --csvP myRes.csv --evalClfr 'best' --judge "srf" "hb" "qwen-plus https://dashscope.aliyuncs.com/compatible-mode/v1 sk-xxxxx"
 ```
 
 ## What to Improve
@@ -30,3 +30,6 @@ Second, you may develop some better and adaptive steering strength schemes for s
 Third, explore which part of the hidden state can best reflect the LLM's text output. We use the hidden state located at the first response token position by default because baselines do so and because we do not want to bargain with reviewers about the fairness of comparison. We have also proven that using the averaged hidden states from all response token positions can improve our method against some LLMs in Table 7. So, if you do not give a shit about the troubling peer review, do explore the alignment between the hidden states and the text output.
 
 Fourth, why not use more prompts? We include 50 harmful prompts during the model extraction because we have limited computation resources and have to benchmark the experiment, again, to deal with the peer review. If you get plenty of daily inference that can be annotated, you may store the hidden states to train the probe iteratively. I don't believe there will be some awful reviewers jumping out of nowhere and arguing that this scheme is not fair.
+
+	
+

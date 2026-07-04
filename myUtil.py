@@ -10,9 +10,10 @@ import numpy as np
 import torch
 import tqdm
 from colorama import Fore, Style
+from datasets import load_dataset
 from peft import PeftModel
 from strong_reject import evaluate, load_datasets
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText
+from transformers import AutoModelForCausalLM, AutoProcessor, AutoConfig, AutoModelForImageTextToText, Qwen3_5ForConditionalGeneration, ContinuousBatchingConfig
 
 import HiddenStateManager
 import myJudge
@@ -95,6 +96,16 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 	tryNum = 10
 	modelN = modelN
 	tokenizerN = tokenizerN
+	num_gpus = torch.cuda.device_count()
+	maxMemory = None
+	# if num_gpus > 1:
+	# 	maxMemory = {}
+	# 	for i in range(num_gpus):
+	# 		total_memory = torch.cuda.get_device_properties(i).total_memory / (1024 ** 2)
+	# 		if i == 0:
+	# 			maxMemory[i] = f"{int(total_memory * 0.1)}MiB"
+	# 		else:
+	# 			maxMemory[i] = f"{int(total_memory * 0.9)}MiB"
 	while tryNum > 0:
 		try:
 			tryNum -= 1
@@ -103,7 +114,7 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
 				model = AutoModelForCausalLM.from_pretrained(
-					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
+					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto", max_memory=maxMemory,
 					trust_remote_code=trust_remote_code
 				)
 				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
@@ -112,9 +123,9 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
 				model = AutoModelForCausalLM.from_pretrained(modelN, dtype='auto', token=os.getenv('HF_TOKEN', default=None),
-															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto",
+															 attn_implementation="sdpa" if 'oss' not in modelN else 'eager', device_map="auto", max_memory=maxMemory,
 															 trust_remote_code=trust_remote_code)
-			if model.dtype == torch.float32:  # Are you mad?
+			if model.dtype == torch.float32 or model.dtype == torch.float16:  # Are you mad?
 				model = model.to(torch.bfloat16)
 			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None),
 													  trust_remote_code=trust_remote_code)
@@ -151,6 +162,16 @@ def loadModel(modelN, tokenizerN, trust_remote_code=False):
 
 def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 	tryNum = 10
+	num_gpus = torch.cuda.device_count()
+	maxMemory = None
+	# if num_gpus > 1:
+	# 	maxMemory = {}
+	# 	for i in range(num_gpus):
+	# 		total_memory = torch.cuda.get_device_properties(i).total_memory / (1024 ** 2)
+	# 		if i == 0:
+	# 			maxMemory[i] = f"{int(total_memory * 0.1)}MiB"
+	# 		else:
+	# 			maxMemory[i] = f"{int(total_memory * 0.9)}MiB"
 	while tryNum > 0:
 		try:
 			tryNum -= 1
@@ -159,7 +180,7 @@ def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 				config = AutoConfig.from_pretrained(lora2base[modelN], token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
 				model = AutoModelForImageTextToText.from_pretrained(
-					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto",
+					lora2base[modelN], torch_dtype='auto', token=os.getenv('HF_TOKEN', default=None), attn_implementation="sdpa", device_map="auto", max_memory=maxMemory,
 					trust_remote_code=trust_remote_code
 				)
 				model = PeftModel.from_pretrained(model, modelN, adapter_name="default",
@@ -168,9 +189,9 @@ def loadVisualModel(modelN, tokenizerN, trust_remote_code=False):
 				config = AutoConfig.from_pretrained(modelN, token=os.getenv('HF_TOKEN', default=None),
 													trust_remote_code=trust_remote_code)
 				model = AutoModelForImageTextToText.from_pretrained(modelN, dtype='auto', token=os.getenv('HF_TOKEN', default=None),
-																	attn_implementation="sdpa", device_map="auto",
+																	attn_implementation="sdpa", device_map="auto", max_memory=maxMemory,
 																	trust_remote_code=trust_remote_code)
-			if model.dtype == torch.float32:  # Are you mad?
+			if model.dtype == torch.float32 or model.dtype == torch.float16:  # Are you mad?
 				model = model.to(torch.bfloat16)
 			processor = AutoProcessor.from_pretrained(tokenizerN, token=os.getenv('HF_TOKEN', default=None), use_fast_image_processor=True,
 													  trust_remote_code=trust_remote_code)
@@ -244,7 +265,7 @@ def getStartAndEnd(attentionMask, allIDs, inputLen, eosID):  # (B, L) aligned wi
 
 
 @torch.no_grad()
-def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None):
+def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None, enableThink=False):
 	completions = []
 	avgScore = 0
 	allScores = []
@@ -260,8 +281,11 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 												   truncation=True,
 												   return_tensors="pt",
 												   return_dict=True,
+												   enable_thinking=enableThink,
 												   add_generation_prompt=True).to(model.device)  # Prepare texts for processing
 			# Inference: Generation of the output
+			pbar.set_description(f"{Fore.RED}Rollout: {Style.RESET_ALL}" + f"{Fore.RED}Average Score: {avgScore}{Style.RESET_ALL}")
+			pbar.refresh()
 			output = model.generate(**inputs, max_new_tokens=maxL,
 									output_hidden_states=True, output_logits=('top' in embType),
 									return_dict_in_generate=True, do_sample=False)
@@ -271,6 +295,8 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 			batchCompletions = processor.batch_decode(generated_ids[:, inputs['input_ids'][0].shape[0]:],
 													  skip_special_tokens=True, clean_up_tokenization_spaces=False)
 			completions += batchCompletions
+			pbar.set_description(f"{Fore.RED}Annotating: {Style.RESET_ALL}" + f"{Fore.RED}Average Score: {avgScore}{Style.RESET_ALL}")
+			pbar.refresh()
 			batchScores = judgeF(batchedPrompts, batchCompletions)
 			allScores += batchScores
 			avgScore = np.array(allScores).mean().item()
@@ -278,17 +304,18 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 				pbar.set_description(f"{Fore.RED}Average Score: {avgScore}; Current Score: {batchScores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
-			labels = [-1 if (biThres[1] > score > biThres[0]) else int(score >= biThres[1]) for score in batchScores]
+			labels = [-1 if (score <= biThres[0]) else int(score >= biThres[1]) for score in batchScores]
+			pbar.set_description(f"{Fore.RED}Collecting Hidden States: {Style.RESET_ALL}" + pbar.desc)
+			pbar.refresh()
 			if 'top' in embType and hooks is not None:
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
 				hooks[-1].enable = True
-			
 			for j in layerIdxs:  # loop for each layer
 				layerLabels = []
 				layerHDs = []
 				for i in range(generated_ids.shape[0]):
-					if labels[i] == -1:
+					if biThres[1] > batchScores[i] > biThres[0] and biThres[1] > 0:
 						continue
 					if embType == 'last':
 						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float()
@@ -308,15 +335,18 @@ def getLLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, l
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
-					layerLabels += [labels[i]] * hd.shape[0]
+					layerLabels += [int(labels[i] * (left + i + 1))] * hd.shape[0]  # 0 for the initial accepted prompts
 					layerHDs.append(hd)
 				if len(layerHDs) > 0:
 					hdManager.add(j, torch.concat(layerHDs, dim=0).cpu(), layerLabels)
+					del hd
+			del output
+			torch.cuda.empty_cache()
 	return hdManager, completions, avgScore
 
 
 @torch.no_grad()
-def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None):
+def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, layerIdxs, prompts, processor, maxL, batchSize, embType, hooks, systemPrompt=None, enableThink=False):
 	completions = []
 	avgScore = 0
 	allScores = []
@@ -336,9 +366,12 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 												   padding=True,
 												   truncation=True,
 												   return_tensors="pt",
+												   enable_thinking=enableThink,
 												   return_dict=True,
 												   add_generation_prompt=True).to(model.device)  # Prepare texts for processing
 			# Inference: Generation of the output
+			pbar.set_description(f"{Fore.RED}Rollout: {Style.RESET_ALL}" + f"{Fore.RED}Average Score: {avgScore}{Style.RESET_ALL}")
+			pbar.refresh()
 			output = model.generate(**inputs, max_new_tokens=maxL,
 									output_hidden_states=True, output_logits=True,
 									return_dict_in_generate=True, do_sample=False)
@@ -348,6 +381,8 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 			batchCompletions = processor.batch_decode(generated_ids[:, inputs['input_ids'][0].shape[0]:],
 													  skip_special_tokens=True, clean_up_tokenization_spaces=False)
 			completions += batchCompletions
+			pbar.set_description(f"{Fore.RED}Annotating: {Style.RESET_ALL}" + f"{Fore.RED}Average Score: {avgScore}{Style.RESET_ALL}")
+			pbar.refresh()
 			batchScores = judgeF(batchedPrompts, batchCompletions)
 			allScores += batchScores
 			avgScore = np.array(allScores).mean().item()
@@ -355,7 +390,9 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 				pbar.set_description(f"{Fore.RED}Average Score: {avgScore}; Current Score: {batchScores[i]}{Style.RESET_ALL}")
 				pbar.update()
 				pbar.refresh()
-			labels = [-1 if (biThres[1] > score > biThres[0]) else int(score >= biThres[1]) for score in batchScores]
+			labels = [-1 if (score <= biThres[0]) else int(score >= biThres[1]) for score in batchScores]
+			pbar.set_description(f"{Fore.RED}Collecting Hidden States: {Style.RESET_ALL}" + pbar.desc)
+			pbar.refresh()
 			if 'top' in embType and hooks is not None:
 				hooks[-1].enable = False
 				importantIndices = tokenImportanceKL(model, processor, output, copy.deepcopy(inputs), embType.split('_')[0], float(embType.split('_')[1]), labels)
@@ -364,7 +401,7 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 				layerLabels = []
 				layerHDs = []
 				for i in range(generated_ids.shape[0]):
-					if labels[i] == -1:
+					if biThres[1] > batchScores[i] > biThres[0] and biThres[1] > 0:
 						continue
 					if embType == 'last':
 						hd = hiddenStates[0][j + 1][i:i + 1, -1, :].float()
@@ -384,32 +421,40 @@ def getLVLMEmb(model, hdManager: HiddenStateManager.HDManager, judgeF, biThres, 
 					else:
 						print(f'{embType} not implemented')
 						exit(1)
-					layerLabels += [labels[i]] * hd.shape[0]
+					layerLabels += [int(labels[i] * (left + i + 1))] * hd.shape[0]  # 0 for the initial accepted prompts
 					layerHDs.append(hd)
 				if len(layerHDs) > 0:
 					hdManager.add(j, torch.concat(layerHDs, dim=0).cpu(), layerLabels)
+					del hd
+			del output
+			torch.cuda.empty_cache()
 	return hdManager, completions, avgScore
 
 
 @torch.no_grad()
-def easyGen(model, processor, prompts: list[str], maxL=128, doSample=False, endThink=None):
+def easyGen(model, processor, prompts: list[str], maxL=128, doSample=False, endThink=None, rawCompletion=False, enableThink=False):
 	queries = [[{"role": "user", "content": prompt}] for prompt in prompts]
 	inputs = processor.apply_chat_template(queries,
 										   padding=True,
 										   truncation=True,
 										   tokenize=True,
 										   return_tensors="pt",
+										   enable_thinking=enableThink,
 										   return_dict=True,
 										   add_generation_prompt=True).to(model.device)  # Prepare texts for processing
 	generated_ids = model.generate(**inputs, max_new_tokens=maxL, do_sample=doSample)
+	startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor.eos_token_id)
 	trimmedIDs = []
+	fullIDs = []
 	for i in range(len(generated_ids)):
-		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:])
+		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:endIdxs[i] + 2])
+	for i in range(len(generated_ids)):
+		fullIDs.append(generated_ids[i][startIdxs[i]:endIdxs[i] + 2])
 	completions = processor.batch_decode(
-		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR) else False, clean_up_tokenization_spaces=False
+		trimmedIDs, skip_special_tokens=False if ((endThink is not None and endThink == USE_PROCESSOR) or rawCompletion) else True, clean_up_tokenization_spaces=False
 	)
 	fullStrs = processor.batch_decode(
-		generated_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+		fullIDs, skip_special_tokens=False, clean_up_tokenization_spaces=False
 	)
 	if endThink is not None:
 		if endThink == USE_PROCESSOR:
@@ -420,7 +465,7 @@ def easyGen(model, processor, prompts: list[str], maxL=128, doSample=False, endT
 
 
 @torch.no_grad()
-def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSample=False, rawCompletion=False, endThink=None):
+def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSample=False, rawCompletion=False, endThink=None, enableThink=False):
 	queries = [[
 		{
 			"role": "user",
@@ -432,18 +477,23 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 										   padding=True,
 										   tokenize=True,
 										   return_tensors="pt",
+										   enable_thinking=enableThink,
 										   return_dict=True,
 										   add_generation_prompt=True).to(model.device)  # Prepare texts for processing
-	output = model.generate(**inputs, max_new_tokens=maxL, do_sample=doSample, return_dict_in_generate=True)
+	output = model.generate_batch(**inputs, max_new_tokens=maxL, do_sample=doSample, return_dict_in_generate=True)
 	generated_ids = output.sequences
+	startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor.tokenizer.eos_token_id)
 	trimmedIDs = []
+	fullIDs = []
 	for i in range(len(generated_ids)):
-		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:])
+		trimmedIDs.append(generated_ids[i][inputs['input_ids'][i].shape[0]:endIdxs[i] + 2])
+	for i in range(len(generated_ids)):
+		fullIDs.append(generated_ids[i][startIdxs[i]:endIdxs[i] + 2])
 	completions = processor.batch_decode(
-		trimmedIDs, skip_special_tokens=True if (endThink is None or endThink != USE_PROCESSOR or rawCompletion) else False, clean_up_tokenization_spaces=False
+		trimmedIDs, skip_special_tokens=False if ((endThink is not None and endThink == USE_PROCESSOR) or rawCompletion) else True, clean_up_tokenization_spaces=False
 	)
 	fullStrs = processor.batch_decode(
-		generated_ids, skip_special_tokens=not rawCompletion, clean_up_tokenization_spaces=False
+		fullIDs, skip_special_tokens=False, clean_up_tokenization_spaces=False
 	)
 	if endThink is not None:
 		if endThink == USE_PROCESSOR:
@@ -454,14 +504,14 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 
 
 @torch.no_grad()
-def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=None):
+def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=None, enableThink=False):
 	allCompletion = []
 	allScores = []
 	meanScore = 0
 	with tqdm.tqdm(prompts, total=len(prompts), desc=f"{Fore.RED}Average Score: {meanScore}{Style.RESET_ALL}", dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
 			batchedPrompts = prompts[left:min(len(prompts), left + batchSize)]
-			fullStrs, completions = easyGen(model, processor, batchedPrompts, maxL, doSample, endThink)
+			fullStrs, completions = easyGen(model, processor, batchedPrompts, maxL, doSample, endThink, enableThink=enableThink)
 			allCompletion += completions
 			scores = judgeF(batchedPrompts, completions)
 			allScores += scores
@@ -474,7 +524,7 @@ def GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=Fals
 
 
 @torch.no_grad()
-def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None, doSample=False, endThink=None):
+def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None, doSample=False, endThink=None, enableThink=False):
 	allCompletion = []
 	allScores = []
 	meanScore = 0
@@ -485,7 +535,7 @@ def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None
 			fullStrs, completions = easyLVLMGen(model, processor,
 												batchedPrompts,
 												imgs[left:min(len(prompts), left + batchSize)],
-												maxL, doSample, False, endThink)
+												maxL, doSample, False, endThink, enableThink=enableThink)
 			allCompletion += completions
 			scores = judgeF(batchedPrompts, completions)
 			allScores += scores
@@ -498,21 +548,48 @@ def GenAndEvalLVLM(model, processor, judgeF, prompts, maxL, batchSize, imgs=None
 
 
 @torch.no_grad()
-def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=None):
+def gen(model, processor, prompts, maxL, batchSize, doSample=False, endThink=None, rawCompletion=False, enableThink=False):
 	allCompletion = []
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
 		for left in range(0, len(prompts), batchSize):
 			batchedPrompt = prompts[left:min(len(prompts), left + batchSize)]
-			fullStrs, completions = easyGen(model, processor, batchedPrompt, maxL, doSample, endThink)
+			fullStrs, completions = easyGen(model, processor, batchedPrompt, maxL, doSample, endThink, rawCompletion, enableThink=enableThink)
 			for completion in completions:
 				allCompletion.append(completion)
 				pbar.update()
 				pbar.refresh()
 	return allCompletion
 
+@torch.no_grad()
+def continuousGen(model, processor, prompts: list[str], maxL=128, doSample=False, endThink=None, rawCompletion=False, enableThink=False):
+	queries = [[{"role": "user", "content": prompt}] for prompt in prompts]
+	inputs = processor.apply_chat_template(queries,
+										   padding=False,
+										   truncation=False,
+										   return_dict=True,
+										   tokenize=True,
+										   enable_thinking=enableThink,
+										   add_generation_prompt=True)  # Prepare texts for processing
+	oldDoSample = copy.deepcopy(model.generation_config.do_sample)
+	model.generation_config.do_sample = doSample
+	outputs = model.generate_batch(inputs['input_ids'], max_new_tokens=maxL, continuous_batching_config=ContinuousBatchingConfig(safety_margin=0.8))
+	model.generation_config.do_sample = oldDoSample
+	trimmedIDs = []
+	for k in outputs.keys():
+		trimmedIDs.append(outputs[k].generated_tokens)
+	completions = processor.batch_decode(
+		trimmedIDs, skip_special_tokens=False if ((endThink is not None and endThink == USE_PROCESSOR) or rawCompletion) else True, clean_up_tokenization_spaces=False
+	)
+	if endThink is not None:
+		if endThink == USE_PROCESSOR:
+			completions = [processor.parse_response(completion)["response"] for completion in completions]
+		else:
+			completions = [completion.split(endThink)[-1] for completion in completions]
+	return completions
+
 
 @torch.no_grad()
-def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, endThink=None, rawCompletion=False):
+def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, endThink=None, rawCompletion=False, enableThink=False):
 	allCompletion = []
 	imgs = imgs if imgs is not None else [None] * len(prompts)
 	with tqdm.tqdm(prompts, total=len(prompts), dynamic_ncols=True) as pbar:
@@ -522,7 +599,7 @@ def genLVLM(model, processor, prompts, imgs, maxL, batchSize, doSample=False, en
 			fullStrs, completions = easyLVLMGen(model, processor,
 												batchedPrompt,
 												batchedImg,
-												maxL, doSample, rawCompletion, endThink)
+												maxL, doSample, rawCompletion, endThink, enableThink=enableThink)
 			for completion in completions:
 				allCompletion.append(completion)
 				pbar.update()
@@ -571,17 +648,17 @@ def eval(prompts, responses, judges, batchSize):
 	return allScores
 
 
-def loadData(dataName, full=False):
+def loadData(dataName):
 	prompts = []
 	if dataName == 'sr':
 		prompts = [p['forbidden_prompt'] for p in load_datasets.load_strongreject()]
-		prompts = prompts
+	elif dataName == 'srs':
+		prompts = [p['forbidden_prompt'] for p in load_datasets.load_strongreject_small()]
 	elif dataName == 'harmbench':
 		csvr = csv.reader(open(r'./instructions/harmbench_behaviors_text_test.csv', 'r+'))
 		for row in csvr:
 			if row[1] == 'standard':
 				prompts.append(row[0])
-		prompts = prompts
 	elif dataName == 'harm':
 		csvr = csv.reader(open(r'./instructions/harmbench_behaviors_text_test.csv', 'r+'))
 		for row in csvr:
@@ -591,9 +668,41 @@ def loadData(dataName, full=False):
 	elif dataName == 'benign':
 		insts = loadDataset(r'./instructions/', 100, 100, 100, 100)
 		prompts = insts['train'][1]
-	elif dataName == 'train':
-		insts = loadDataset(r'./instructions/', 50, 50, 50, 50, full=full)
+	elif dataName == 'rd':
+		insts = loadDataset(r'./instructions/', 50, 50, 50, 50, full=False)
 		prompts = (insts['train'][0], insts['train'][1], insts['val'][0], insts['val'][1])
+	elif dataName == 'rdVal':
+		insts = loadDataset(r'./instructions/', 50, 50, 50, 50, full=False)
+		prompts = insts['val'][0]
+	elif dataName == 'rdFull':
+		insts = loadDataset(r'./instructions/', 50, 50, 50, 50, full=True)
+		prompts = (insts['train'][0], insts['train'][1], insts['val'][0], insts['val'][1])
+	elif dataName == 'heretic':
+		harmData = load_dataset(
+			"mlabonne/harmful_behaviors",
+			revision=None,
+			split='train[:400]',
+		)
+		harmPrompts = list(harmData['text'])
+		benignData = load_dataset(
+			"mlabonne/harmless_alpaca",
+			revision=None,
+			split='train[:400]',
+		)
+		benignPrompts = list(benignData['text'])
+		prompts = (harmPrompts, benignPrompts, harmPrompts, benignPrompts)
+	elif dataName == 'srTrain':
+		harmPrompts = [p['forbidden_prompt'] for p in load_datasets.load_strongreject()]
+		benignData = load_dataset(
+			"mlabonne/harmless_alpaca",
+			revision=None,
+			split='train[:400]',
+		)
+		benignPrompts = list(benignData['text'])
+		prompts = (harmPrompts, benignPrompts, harmPrompts, benignPrompts)
+	elif dataName == 'small':
+		insts = loadDataset(r'./instructions/', 50, 50, 50, 50, full=False)
+		prompts = insts['train'][0][:1]
 	else:
 		print(f'{dataName} not supported')
 		exit(1)
@@ -601,10 +710,10 @@ def loadData(dataName, full=False):
 
 
 @torch.no_grad()
-def filterData(model, processor, judge, prompts, maxL, batchSize, thres, endThink):
+def filterData(model, processor, judge, prompts, maxL, batchSize, thres, endThink, enableThink=False):
 	print('Filtering')
 	judgeM, judgeF = loadJudge(judge)
-	_, scores = GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=endThink)
+	_, scores = GenAndEval(model, processor, judgeF, prompts, maxL, batchSize, doSample=False, endThink=endThink, enableThink=enableThink)
 	del judgeM
 	ret = []
 	for i, p in enumerate(prompts):
@@ -627,13 +736,14 @@ def getLayer(layerNum, layer: list):
 
 
 @torch.no_grad()
-def getInputsAndLabels(processor, prompt, target, img):
+def getInputsAndLabels(processor, prompt, target, img, enableThink=False):
 	inputNoTarget = processor.apply_chat_template(
 		[
 			{"role": "user", "content": [{'type': 'image', 'image': img}, {'type': 'text', "text": prompt}]},
 		],
 		tokenize=True,
 		add_generation_prompt=True,
+		enable_thinking=enableThink,
 		return_attention_mask=True,
 		return_tensors="pt",
 		return_dict=True,
@@ -646,6 +756,7 @@ def getInputsAndLabels(processor, prompt, target, img):
 		],
 		tokenize=True,
 		add_generation_prompt=False,
+		enable_thinking=enableThink,
 		continue_final_message=True,
 		return_attention_mask=True,
 		return_tensors="pt",
@@ -655,6 +766,38 @@ def getInputsAndLabels(processor, prompt, target, img):
 	label = inputWithTarget.input_ids.clone()
 	label[:, :inputNoTarget.input_ids.shape[-1]] = -100
 	return inputWithTarget, label
+
+
+@torch.no_grad()
+def getInputsAndLabelsText(processor, prompt, target, enableThink=False):
+	inputNoTarget = processor.apply_chat_template(
+		[
+			{"role": "user", "content": prompt},
+		],
+		tokenize=True,
+		add_generation_prompt=True,
+		enable_thinking=enableThink,
+		return_attention_mask=True,
+		return_tensors="pt",
+		return_dict=True,
+	
+	)
+	inputWithTarget = processor.apply_chat_template(
+		[
+			{"role": "user", "content": prompt},
+			{"role": "assistant", "content": target}
+		],
+		tokenize=True,
+		add_generation_prompt=False,
+		continue_final_message=True,
+		enable_thinking=enableThink,
+		return_attention_mask=True,
+		return_tensors="pt",
+		return_dict=True,
+	
+	)
+	label = inputWithTarget.input_ids.clone()
+	return inputWithTarget, label[:, :inputNoTarget.input_ids.shape[-1]]
 
 
 @torch.no_grad()

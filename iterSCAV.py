@@ -23,14 +23,16 @@ if __name__ == '__main__':
 	parser.add_argument('--judge', type=str, required=True, help="The annotator")
 	parser.add_argument('--layer', nargs='+', type=float, default=[-2], help="The interval of selected layer. Length <= 2")
 	parser.add_argument('--linearC', type=str, required=True, choices=['cuLR', 'cuSVC', 'skLR'], help="The type of linear model")
-	parser.add_argument('--val', action='store_true', help="Whether to conduct validation during adaptive retraining")
-	parser.add_argument('--full', action='store_true', help="Whether to use all data")
+	parser.add_argument('--val', type=str, help="Validation datasets during adaptive retraining")
+	parser.add_argument('--train', type=str, help="Training datasets during adaptive retraining")
 	parser.add_argument('--normReg', action='store_true', help="Whether to dynamically set regularization strength according to norm of inputs")
 	parser.add_argument('--trust', action='store_true', help="Trust remote code?")
+	parser.add_argument('--tb', action='store_true', help="Topic Balance?")
+	parser.add_argument('--et', action='store_true', help="Thinking??")
 	parser.add_argument('--filter', type=float, help="To filter out benign prompts that are refused by the model")
 	args = parser.parse_args()
 	print(args)
-	assert args.thres[1] >= args.thres[0] and args.thres[1] <= 1.0 and args.thres[0] >= 0.0
+	assert args.thres[1] >= args.thres[0]  # and 0.0 <= args.thres[1] <= 1.0 and 1.0 >= args.thres[0] >= 0.0
 	if args.tokenizer is None:
 		args.tokenizer = args.model
 	
@@ -42,24 +44,27 @@ if __name__ == '__main__':
 	judgeN = args.judge.split(' ')[0]
 	layerIdxs = myUtil.getLayer(config.num_hidden_layers, args.layer)
 	clfP = os.path.join(saveDir,
-						f'full{args.full}_judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer[{layerIdxs[0]}, {layerIdxs[-1]}]_linearC{args.linearC}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
+						f'Data{args.train}_Thinking{args.et}_TopicBalance{args.tb}_judge{judgeN}_embType{args.embType}_filter{args.filter}_normReg{args.normReg}_layer[{layerIdxs[0]}, {layerIdxs[-1]}]_linearC{args.linearC}_maxIter{args.maxIter}_trainL{args.trainL}_pt{args.pt}_softThres{args.thres}.pt'.replace(
 							'/',
 							'-'))
-	harmTrainPrompts, benignTrainPrompts, harmValPrompts, _ = myUtil.loadData('train', args.full)
+	harmTrainPrompts, benignTrainPrompts, _, _ = myUtil.loadData(args.train)
+	harmValPrompts = None
+	if args.val is not None:
+		harmValPrompts = myUtil.loadData(args.val)
 	if args.filter is not None:
-		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, args.trainL, args.bs, args.filter, None)
+		benignTrainPrompts = myUtil.filterData(model, processor, args.judge, benignTrainPrompts, args.trainL, args.bs, args.filter, None, enableThink=args.et)
 	# get initial embd
 	hdManager = HiddenStateManager.HDManager(layerIdxs)
 	# get the hd you don't prefer
 	hdManager, _, _ = myUtil.getLLMEmb(model, hdManager, lambda x, y: [0.0] * len(x), args.thres, layerIdxs,
 									   harmTrainPrompts, processor,
 									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1, args.bs,
-									   args.embType, None, None)
+									   args.embType, None, None, enableThink=args.et)
 	# get the hd you prefer
-	hdManager, _, _ = myUtil.getLLMEmb(model, hdManager, lambda x, y: [1.0] * len(x), args.thres, layerIdxs,
+	hdManager, _, _ = myUtil.getLLMEmb(model, hdManager, lambda x, y: [-2] * len(x), [-3, -1], layerIdxs,
 									   benignTrainPrompts, processor,
 									   args.trainL if (args.embType in ['all', 'response'] or 'top' in args.embType) else 1, args.bs,
-									   args.embType, None, None)
+									   args.embType, None, None, enableThink=args.et)
 	# train initial probe
 	allProbes = {}
 	# get judge
@@ -68,17 +73,17 @@ if __name__ == '__main__':
 	allPosScore = []
 	for i in range(args.maxIter):
 		# train
-		probes = ProbeManager.train(hdManager, args.linearC, args.normReg)
+		probes = ProbeManager.train(hdManager, args.linearC, args.normReg, args.tb)
 		print(f"\nIter {i + 1}")
 		
 		# validation
 		valCompletion = []
 		posScore = 0
-		if args.val:
+		if harmValPrompts is not None:
 			print(f"Validation Target Prob.: {ProbeManager.getTargetProb(probes, args.evalPT)}")
 			# hook model
 			hooks = ProbeManager.hookModel(model, probes, args.evalPT)
-			valCompletion, allRes = myUtil.GenAndEval(model, processor, judgeF, harmValPrompts, args.trainL, args.bs, False)
+			valCompletion, allRes = myUtil.GenAndEval(model, processor, judgeF, harmValPrompts, args.trainL, args.bs, False, enableThink=args.et)
 			posScore = torch.tensor(allRes).float().mean().item()
 			# unhook model
 			for hook in hooks:
@@ -91,8 +96,8 @@ if __name__ == '__main__':
 		hdManager, trainCompletion, _ = myUtil.getLLMEmb(model, hdManager, judgeF, args.thres, layerIdxs,
 														 harmTrainPrompts, processor,
 														 args.trainL, args.bs,
-														 args.embType, hooks, None)  # get steered hd
-		posScore = _ if not args.val else posScore
+														 args.embType, hooks, None, enableThink=args.et)  # get steered hd
+		posScore = _ if harmValPrompts is None else posScore
 		# unhook model
 		for hook in hooks:
 			hook.remove()

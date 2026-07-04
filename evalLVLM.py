@@ -23,8 +23,9 @@ if __name__ == '__main__':
 	parser.add_argument('--doSample', action='store_true', help="Whether to do sample")
 	parser.add_argument('--answerOnly', action='store_true', help="Whether to discard CoT")
 	parser.add_argument('--trust', action='store_true', help="Trust remote code?")
+	parser.add_argument('--et', action='store_true', help="Trust remote code?")
 	parser.add_argument('--judge', type=str, nargs='+', help="Judges to use")
-	parser.add_argument('--evalData', type=str, required=True, choices=['sr', 'harmbench', 'harm'], help="Which benchmark to use")
+	parser.add_argument('--evalData', type=str, required=True, help="Which benchmark to use")
 	args = parser.parse_args()
 	print(args)
 	if args.tokenizer is None:
@@ -32,8 +33,8 @@ if __name__ == '__main__':
 	# load model & processor
 	disable_caching()
 	prompts = myUtil.loadData(args.evalData)
-	headerLine = ['Dataset', 'Model', 'Sample', 'evalPT', 'ClfP', 'evalClfr', 'maxL', 'answerOnly']
-	valueLine = [args.evalData, args.model, args.doSample, args.evalPT, os.path.split(args.clfP)[-1], args.evalClfr, args.maxL, args.answerOnly]
+	headerLine = ['Dataset', 'Model', 'Sample', 'evalPT', 'ClfP', 'evalClfr', 'maxL', 'answerOnly', 'Thinking']
+	valueLine = [args.evalData, args.model, args.doSample, args.evalPT, os.path.split(args.clfP)[-1], args.evalClfr, args.maxL, args.answerOnly, args.et]
 	with torch.no_grad():
 		model, processor, config = myUtil.loadVisualModel(args.model, args.tokenizer, args.trust)
 		probeName = 'None'
@@ -42,7 +43,7 @@ if __name__ == '__main__':
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
 			hooks = ProbeManager.hookModel(model, probes, args.evalPT)
 		print(probeName)
-		allComp = myUtil.genLVLM(model, processor, prompts, [None] * len(prompts), args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None)
+		allComp = myUtil.genLVLM(model, processor, prompts, [None] * len(prompts), args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None, enableThink=args.et)
 		del model
 		torch.cuda.empty_cache()
 		allScores = myUtil.eval(prompts, allComp, args.judge, args.bs)

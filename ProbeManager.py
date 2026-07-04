@@ -5,25 +5,57 @@ import numpy as np
 import torch
 from peft import PeftModel
 from sklearn.linear_model import LogisticRegression as skLR
-
 import HiddenStateManager
 from cuml.linear_model import LogisticRegression
 from cuml.svm.linear_svc import LinearSVC
 
 
 @torch.no_grad()
-def train(hdManager: HiddenStateManager.HDManager, linearC, normReg: bool):
+def train(hdManager: HiddenStateManager.HDManager, linearC, normReg: bool, tb: bool):
 	probes = {}
 	for layerIdx, batch in hdManager.layer2hd.items():
 		x = batch['hd'].clone().detach().numpy()
-		C = min(1.0, 1 / torch.norm(batch['hd'].float(), dim=-1).mean().item()) if normReg else 1.0
+		C = (1 / (torch.norm(batch['hd'].float(), dim=-1).mean().item() ** 2)) if normReg else 1.0
 		y = batch['label'].clone().detach().numpy()
 		totalWeight = x.shape[0]
 		sampleWeight = np.ones_like(y, dtype=np.float32)
-		posClassWeight = totalWeight / (2 * sampleWeight[y == 1].sum().item())
-		negClassWeight = totalWeight / (2 * sampleWeight[y == 0].sum().item())
-		sampleWeight[y == 1] *= posClassWeight
-		sampleWeight[y == 0] *= negClassWeight
+		
+		posIndex = y >= 0  # if np.unique(y[y >= 0]).shape[0] == 1 else (y > 0)
+		negIndex = y < 0  # if np.unique(y[y >= 0]).shape[0] == 1 else (y <= 0)
+
+		# Class Balance
+		posClassWeight = totalWeight / (2 * sampleWeight[posIndex].sum().item())
+		negClassWeight = totalWeight / (2 * sampleWeight[negIndex].sum().item())
+		sampleWeight[posIndex] *= posClassWeight
+		sampleWeight[negIndex] *= negClassWeight
+		if tb:
+			# Topic Balance
+			uniquePos = np.unique(y[posIndex])
+			uniqueNeg = np.unique(y[negIndex])
+			sliceNum = uniqueNeg.shape[0]
+			absY = np.abs(y)
+			incelIndexes = []
+			for un in uniqueNeg:
+				if abs(un) in uniquePos:  # chad
+					oriWeightSum = np.sum(sampleWeight[absY == abs(un)]).item()
+					sampleWeight[absY == abs(un)] *= totalWeight / (sliceNum * oriWeightSum) if oriWeightSum != 0 else 0
+					sliceWeightSum = np.sum(sampleWeight[absY == abs(un)]).item()
+					sampleWeight[y == un] *= sliceWeightSum / (2 * np.sum(sampleWeight[y == un]).item())
+					sampleWeight[y == (-un)] *= sliceWeightSum / (2 * np.sum(sampleWeight[y == (-un)]).item())
+				else:  # incel
+					incelIndexes.append(un)
+			incelWeight = totalWeight * len(incelIndexes) / sliceNum
+			for incelIndex in incelIndexes:
+				sampleWeight[y == incelIndex] *= incelWeight / (2 * len(incelIndexes) * np.sum(sampleWeight[y == incelIndex]))
+			sampleWeight[y == 0] *= incelWeight / (2 * np.sum(sampleWeight[y == 0]))
+			
+			# if len(incelIndex) > 0:
+			# 	incelIndex = np.array(incelIndex, dtype=np.long)
+			# else:
+			# oriWeightSum = np.sum(sampleWeight[y == un]).item()
+			# sampleWeight[y == un] *= totalNegWeight / (uniqueNeg.shape[0] * oriWeightSum) if oriWeightSum != 0 else 0
+		y[posIndex] = 1
+		y[negIndex] = 0
 		if linearC == 'cuLR':
 			linear = LogisticRegression(solver="qn", max_iter=10000,
 										# class_weight='balanced',
@@ -44,10 +76,10 @@ def train(hdManager: HiddenStateManager.HDManager, linearC, normReg: bool):
 		linear.fit(x, y, sample_weight=sampleWeight)
 		w = torch.tensor(linear.coef_, requires_grad=False)
 		b = torch.tensor(linear.intercept_, requires_grad=False)
-		score = (batch['hd'][y == 1, :].cuda().float() @ w.T.cuda().float() + b.cuda().float()).squeeze(-1)  # (B, )
+		selectedIndex = (y == 1) * (sampleWeight != 0)
+		score = (batch['hd'][selectedIndex, :].cuda().float() @ w.T.cuda().float() + b.cuda().float()).squeeze(-1)  # (B, )
 		probes[layerIdx] = {'w': w, 'b': b, 'score': score}  # (1, D), (1, ), (B, )
 	return probes
-
 
 @torch.no_grad()
 def getTargetScores(probes, strength: str):
