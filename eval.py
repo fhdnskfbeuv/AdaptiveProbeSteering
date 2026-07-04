@@ -43,8 +43,8 @@ if __name__ == '__main__':
 			probes, probeName = ProbeManager.getProbe(allProbes, args.evalClfr)
 			hooks = ProbeManager.hookModel(model, probes, args.evalPT)
 		print(probeName)
-		allComp = myUtil.continuousGen(model, processor, prompts, args.maxL, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None, rawCompletion=False, enableThink=args.et)
-		# allComp = myUtil.gen(model, processor, prompts, args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None, rawCompletion=False, enableThink=args.et)
+		# allComp = myUtil.continuousGen(model, processor, prompts, args.maxL, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None, rawCompletion=False, enableThink=args.et)
+		allComp = myUtil.gen(model, processor, prompts, args.maxL, args.bs, args.doSample, myUtil.model2thinkend.get(args.model, None) if args.answerOnly else None, rawCompletion=False, enableThink=args.et)
 		del model
 		torch.cuda.empty_cache()
 		allScores = myUtil.eval(prompts, allComp, args.judge, args.bs)
