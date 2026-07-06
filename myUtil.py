@@ -480,7 +480,7 @@ def easyLVLMGen(model, processor, prompts: list[str], imgs: list, maxL=128, doSa
 										   enable_thinking=enableThink,
 										   return_dict=True,
 										   add_generation_prompt=True).to(model.device)  # Prepare texts for processing
-	output = model.generate_batch(**inputs, max_new_tokens=maxL, do_sample=doSample, return_dict_in_generate=True)
+	output = model.generate(**inputs, max_new_tokens=maxL, do_sample=doSample, return_dict_in_generate=True)
 	generated_ids = output.sequences
 	startIdxs, endIdxs = getStartAndEnd(inputs['attention_mask'], generated_ids, inputs['input_ids'].shape[1], processor.tokenizer.eos_token_id)
 	trimmedIDs = []
