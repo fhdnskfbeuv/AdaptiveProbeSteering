@@ -2,6 +2,18 @@
 
 This is a repository containing our method only.
 
+## Supporting vLLM
+
+We now support vLLM through customized model registered through plugin system. After installing vllm, run
+
+```commandline
+cd vllm_hook_plugins
+pip install -e .
+```
+
+You can use ```transferSteer2Safetensors.py``` to transform Probes + HF Model into a repo that can be loaded by vLLM.
+
+
 ## Pretrained Probes at HF
 
 We provide some probes at [HuggingFace](https://huggingface.co/collections/FTK11558/aps-jailbreak). You can directly load them with ```from_pretrained```. You can also load them with vllm. 
