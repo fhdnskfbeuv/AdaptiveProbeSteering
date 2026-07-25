@@ -11,7 +11,13 @@ cd vllm_hook_plugins
 pip install -e .
 ```
 
-You can use ```transferSteer2Safetensors.py``` to transform Probes + HF Model into a repo that can be loaded by vLLM.
+You can use ```transferSteer2Safetensors.py``` to transform Probes + HF Model into a repo that can be loaded by vLLM. We have uploaded jailbroken Circuit Breaker. You can try it with
+
+```commandline
+vllm serve FTK11558/Llama-3-8B-Instruct-RR-Broken-APS-vllm --port YOUR_PORT
+vllm chat --url YOUR_URL
+```
+
 
 
 ## Pretrained Probes at HF
