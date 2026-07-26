@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 
 import torch
 import transformers
@@ -58,6 +59,33 @@ MULTIMODAL_ARCHS = {
 	'Gemma4UnifiedForConditionalGeneration',
 	'Qwen3_5MoeForConditionalGeneration',
 	'Qwen3_5ForConditionalGeneration',
+}
+
+# Self-contained HF modeling file to copy into the transferred repo, the steered
+# class name it defines, and the Auto class for ``auto_map`` (trust_remote_code).
+HF_MODEL_FILE = {
+	'LlamaForCausalLM': 'SteeredLlamaForCausalLM.py',
+	'MistralForCausalLM': 'SteeredMistralForCausalLM.py',
+	'Gemma2ForCausalLM': 'SteeredGemma2ForCausalLM.py',
+	'Gemma4UnifiedForConditionalGeneration': 'SteeredGemma4UnifiedForConditionalGeneration.py',
+	'Qwen3_5MoeForConditionalGeneration': 'SteeredQwen3_5ForConditionalGeneration.py',
+	'Qwen3_5ForConditionalGeneration': 'SteeredQwen3_5ForConditionalGeneration.py',
+}
+HF_CLASS_NAME = {
+	'LlamaForCausalLM': 'SteeredLlamaForCausalLM',
+	'MistralForCausalLM': 'SteeredMistralForCausalLM',
+	'Gemma2ForCausalLM': 'SteeredGemma2ForCausalLM',
+	'Gemma4UnifiedForConditionalGeneration': 'SteeredGemma4UnifiedForConditionalGeneration',
+	'Qwen3_5MoeForConditionalGeneration': 'SteeredQwen3_5MoeForConditionalGeneration',
+	'Qwen3_5ForConditionalGeneration': 'SteeredQwen3_5ForConditionalGeneration',
+}
+HF_AUTO_CLASS = {
+	'LlamaForCausalLM': 'AutoModelForCausalLM',
+	'MistralForCausalLM': 'AutoModelForCausalLM',
+	'Gemma2ForCausalLM': 'AutoModelForCausalLM',
+	'Gemma4UnifiedForConditionalGeneration': 'AutoModelForConditionalGeneration',
+	'Qwen3_5MoeForConditionalGeneration': 'AutoModelForConditionalGeneration',
+	'Qwen3_5ForConditionalGeneration': 'AutoModelForConditionalGeneration',
 }
 
 
@@ -133,17 +161,20 @@ def makeReadable(root: str):
 			os.chmod(os.path.join(dirpath, name), 0o644)
 
 
-def setArchitectures(saveDir: str, arch: str):
+def setArchitectures(saveDir: str, arch: str, autoMap: dict | None = None):
 	"""Force the saved config.json to advertise the steered vLLM architecture.
 
 	Some transformers model classes reset ``architectures`` during
 	``save_pretrained``, so rewrite the field on disk to be sure vLLM picks the
-	registered ``vllmSteered*`` class.
+	registered ``vllmSteered*`` class.  Optionally sets ``auto_map`` so the
+	checkpoint can be loaded with ``trust_remote_code=True``.
 	"""
 	configPath = os.path.join(saveDir, 'config.json')
 	with open(configPath, 'r', encoding='utf-8') as f:
 		cfg = json.load(f)
 	cfg['architectures'] = [arch]
+	if autoMap is not None:
+		cfg['auto_map'] = autoMap
 	with open(configPath, 'w', encoding='utf-8') as f:
 		json.dump(cfg, f, indent=2, ensure_ascii=False)
 
@@ -221,7 +252,14 @@ def main():
 		AutoProcessor.from_pretrained(args.model).save_pretrained(saveDir)
 	except Exception:
 		AutoTokenizer.from_pretrained(args.model).save_pretrained(saveDir)
-	setArchitectures(saveDir, ARCH_MAP[origArch])
+	# Copy the self-contained HF modeling file so the checkpoint can be loaded
+	# with trust_remote_code=True (e.g. AutoModelForCausalLM.from_pretrained).
+	hfFile = HF_MODEL_FILE[origArch]
+	scriptDir = os.path.dirname(os.path.abspath(__file__))
+	shutil.copy2(os.path.join(scriptDir, 'HFCustomizedModel', hfFile),
+				 os.path.join(saveDir, hfFile))
+	autoMap = {HF_AUTO_CLASS[origArch]: f'{hfFile[:-3]}.{HF_CLASS_NAME[origArch]}'}
+	setArchitectures(saveDir, ARCH_MAP[origArch], autoMap)
 	makeReadable(saveDir)
 	print(f'Done. Steered layers: {model.config.steered_layers}')
 	print(f'Point vLLM at this directory (not --output itself):\n    {os.path.abspath(saveDir)}')
