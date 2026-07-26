@@ -22,7 +22,7 @@ vllm chat --url YOUR_URL
 
 ## Pretrained Probes at HF
 
-We provide some probes at [HuggingFace](https://huggingface.co/collections/FTK11558/aps-jailbreak). You can directly load them with ```from_pretrained```. You can also load them with vllm. 
+We provide some probes at [HuggingFace](https://huggingface.co/collections/FTK11558/aps-jailbreak). You can directly load them with ```from_pretrained```. 
 
 ## Generating Probes
 
