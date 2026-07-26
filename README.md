@@ -7,7 +7,7 @@ This is a repository containing our method only.
 We now support vLLM through customized model registered through plugin system. After installing vllm, run
 
 ```commandline
-cd vllm_hook_plugins
+cd vllm_steered_plugins
 pip install -e .
 ```
 
